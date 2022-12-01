@@ -1,0 +1,13 @@
+env: SunblazeCartPole-v0
+train_params:
+  p1: [0.25, 0.5, 1.5, 2.5]
+  p2: [1.0]
+num_test: 2
+test_range:
+  p1: [0.1, 0.15]
+  p2: [2.75, 3.0]
+n_itr: 10
+total_test: 10
+test_num_rollouts: 10
+max_path_length: 1000
+simulation_param_dim: 2
