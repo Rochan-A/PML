@@ -5,8 +5,7 @@ from os.path import join
 
 import argparse, datetime
 
-import gym, torch
-import sunblaze_envs
+import torch
 
 from tensorboardX import SummaryWriter
 
@@ -31,7 +30,7 @@ def gen_save_path(args, config):
 
     if config.MPC.optimizer in ["random", "CEM"]:
         PATH = join(PATH, "{}".format(config.MPC.optimizer))
-        # TODO: add params to path
+        # TODO: add optimizer params to path
         # PATH = join(PATH, "hor_{}".format(config.MPC.))
     else:
         raise ValueError(args.policy_type)
@@ -47,10 +46,9 @@ def gen_save_path(args, config):
 
 
 def main(args, config, PATH):
-    # Initialize env
-    env = sunblaze_envs.make(config.env)
-    # Convert to contextual env
-    env = ContexualEnv(env, config)
+
+    # Contextual env
+    env = ContexualEnv(config)
 
     # Initialize models
     dynamics_model = DynamicsModel(

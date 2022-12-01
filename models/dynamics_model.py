@@ -14,7 +14,7 @@ class DNet(nn.Module):
 
         self.context_enc = ContextEncoder(config.context.history_sz, state_sz, config.context.hidden_sizes, config.context.out_dim).to(device=self.device)
         self.backbone = Backbone(config.backbone.hidden_sizes, state_sz, config.backbone.out_dim).to(device=self.device)
-        self.reward_enc = RewardModel(state_sz, config.reward.model.hidden_sizes, config.backbone.out_dim+config.context.out_dim).to(device=self.device)
+        self.reward_enc = [RewardModel(state_sz, config.reward.model.hidden_sizes, config.backbone.out_dim+config.context.out_dim).to(device=self.device) for _ in range(config.head.ensemble_size)]
         self.heads = [Head(config.backbone.out_dim+config.context.out_dim, config.head.hidden_sizes, state_sz).to(device=self.device) for _ in range(config.head.ensemble_size)]
 
     def forward(self, state, action, history):
@@ -31,7 +31,7 @@ class DNet(nn.Module):
         bc_embb = torch.cat([b_embb, c_embb], dim=-1)
         pred_rews = []
         for idx in range(len(self.heads)):
-            pred_rews.append(self.reward_enc.forward(pred_next_state[idx], bc_embb))
+            pred_rews.append(self.reward_enc[idx].forward(pred_next_state[idx], bc_embb))
         return pred_rews
 
     def context(self, history):
@@ -39,6 +39,10 @@ class DNet(nn.Module):
 
 
 def compute_head_loss(outputs, labels, criterion):
+    raise NotImplementedError
+
+
+def select_head(outputs, labels, criterion):
     raise NotImplementedError
 
 

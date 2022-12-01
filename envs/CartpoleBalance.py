@@ -63,15 +63,15 @@ class CartPoleEnv_template(gym.Env):
         'video.frames_per_second': 50
     }
 
-    def __init__(self, masscart =1.0, masspole=0.1, polelength=0.5, discret = False):
-        self.gravity = 9.8
+    def __init__(self, masscart=1.0, masspole=0.1, polelength=0.5, gravity=9.8, force_mag=10.0, discret=False):
+        self.gravity = gravity
         self.masscart = masscart
         self.masspole = masspole
         self.total_mass = (self.masspole + self.masscart)
         self.length = polelength  # actually half the pole's length
         self.polemass_length = (self.masspole * self.length)
         self.discret = discret
-        self.force_mag = 10.0
+        self.force_mag = force_mag
         self.max_mag = 1.0
         self.tau = 0.02  # seconds between state updates
         self.kinematics_integrator = 'euler'
