@@ -1,13 +1,95 @@
-env: SunblazeCartPole-v0
-train_params:
-  p1: [0.25, 0.5, 1.5, 2.5]
+# Environment configuration
+env: SunblazeCartPole-v0          # env name
+train_params:                     # model contexts for training
+- p1: [0.25, 0.5, 1.5, 2.5]
   p2: [1.0]
-num_test: 2
-test_range:
-  p1: [0.1, 0.15]
+test_range:                       # model contexts for testing
+- p1: [0.1, 0.15]
   p2: [2.75, 3.0]
-n_itr: 10
-total_test: 10
-test_num_rollouts: 10
-max_path_length: 1000
-simulation_param_dim: 2
+n_itr: 10                         # number of time to re-run tests
+normalize_flag: False             # normalize state
+
+# MPC controller configuration
+MPC:
+  optimizer: "CEM"                # random or CEM, # random may need to fix bugs
+  random:                         # TODO: warning may contain not finished modification
+    horizon: 15                   # how long of the horizon to predict
+    popsize: 40000                # how many random samples for mpc
+    gamma: 0.99                   # reward discount coefficient
+    max_iters: 20
+    num_elites: 50
+    epsilon: 0.2
+    alpha: 0.01
+    init_mean: 0
+    init_var: 10
+    particle: 1
+  CEM:
+    horizon: 15                   # how long of the horizon to predict
+    popsize: 1000                 # how many random samples for mpc
+    particle: 1                   # number of particles to enlarge
+    gamma: 1                      # reward discount coefficient
+    max_iters: 5
+    num_elites: 20
+    epsilon: 0.001
+    alpha: 0.1
+    init_mean: 0
+    init_var: 1
+
+# Model arch parameters
+context:
+    load_model: False
+    model_path: "./saves/context.ckpt"
+    hidden_sizes: 256
+    hidden_nonlinearity: relu
+    out_dim: 128
+
+head:
+    load_model: False
+    model_path: "./saves/head.ckpt"
+    hidden_sizes: 256
+    hidden_nonlinearity: relu
+    ensemble_size: 5
+
+backbone:
+    load_model: False
+    model_path: "./saves/backbone.ckpt"
+    hidden_sizes: 256
+    hidden_nonlinearity: relu
+    ensemble_size: 5
+    out_dim: 128
+
+# Dynamics model training config
+dynamics:
+  training_config:
+    n_epochs: 600
+    learning_rate: 0.0005
+    batch_size: 512
+    save_model_flag: False
+    save_model_path: "./saves/dynamics.ckpt"
+    validation_flag: True
+    validation_freq: 50           # the frequency of validation
+    validation_ratio: 0.2         # ratio of validation set
+
+reward:
+  model:
+    load_model: False
+    model_path: "./saves/reward.ckpt"
+    hidden_sizes: 256
+    hidden_nonlinearity: relu
+  training_config:
+    n_epochs: 600                 # how many epoches to train the dynamic model
+    learning_rate: 0.0005         # learning rate
+    batch_size: 512
+    save_model_flag: True
+    save_model_path: "./saves/reward.ckpt"
+    validation_flag: True
+    validation_freq: 50           # the frequency of validation
+    validation_ratio: 0.2         # ratio of validation set
+
+
+# "Trajectory-wise Multiple Choice Learning for Dynamics Generalization in Reinforcement Learning" parameters
+TW:
+  history_length: 10
+  future_length: 10
+  state_diff: 0
+  non_adaptive_planning: 0
