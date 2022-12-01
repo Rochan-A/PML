@@ -1,4 +1,8 @@
 """
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
+@Author: Zuxin Liu
+@Email: zuxinl@andrew.cmu.edu
+
 Cart pole swing-up: Original version from:
 https://github.com/zuoxingdong/DeepPILCO/blob/master/cartpole_swingup.py
 Modified so that done=True when x is outside of -2.4 to 2.4

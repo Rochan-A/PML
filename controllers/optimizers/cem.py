@@ -1,10 +1,8 @@
-'''
+"""
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
 @Author: Zuxin Liu
 @Email: zuxinl@andrew.cmu.edu
-@Date:   2020-03-24 01:03:52
-@LastEditTime: 2020-04-22 22:06:12
-@Description:
-'''
+"""
 
 from __future__ import division
 from __future__ import print_function

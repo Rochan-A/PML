@@ -37,38 +37,39 @@ MPC:
 
 # Model arch parameters
 context:
-    load_model: False
-    model_path: "./saves/context.ckpt"
-    hidden_sizes: 256
-    hidden_nonlinearity: relu
-    out_dim: 128
+  load_model: False
+  model_path: "./saves/context.ckpt"
+  hidden_sizes: 256
+  hidden_nonlinearity: relu
+  out_dim: 128
+  history_sz: 16
 
 head:
-    load_model: False
-    model_path: "./saves/head.ckpt"
-    hidden_sizes: 256
-    hidden_nonlinearity: relu
-    ensemble_size: 5
+  load_model: False
+  model_path: "./saves/head.ckpt"
+  hidden_sizes: 256
+  hidden_nonlinearity: relu
+  ensemble_size: 5
 
 backbone:
-    load_model: False
-    model_path: "./saves/backbone.ckpt"
-    hidden_sizes: 256
-    hidden_nonlinearity: relu
-    ensemble_size: 5
-    out_dim: 128
+  load_model: False
+  model_path: "./saves/backbone.ckpt"
+  hidden_sizes: 256
+  hidden_nonlinearity: relu
+  ensemble_size: 5
+  out_dim: 128
 
 # Dynamics model training config
 dynamics:
-  training_config:
-    n_epochs: 600
-    learning_rate: 0.0005
-    batch_size: 512
-    save_model_flag: False
-    save_model_path: "./saves/dynamics.ckpt"
-    validation_flag: True
-    validation_freq: 50           # the frequency of validation
-    validation_ratio: 0.2         # ratio of validation set
+  load_model: False
+  n_epochs: 600
+  learning_rate: 0.0005
+  batch_size: 512
+  save_model_flag: False
+  save_model_path: "./saves/dynamics.ckpt"
+  validation_flag: True
+  validation_freq: 50           # the frequency of validation
+  validation_ratio: 0.2         # ratio of validation set
 
 reward:
   model:

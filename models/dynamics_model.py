@@ -2,45 +2,59 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from .base import ContextEncoder, Head, Backbone, RewardModel
+
 def CUDA(var):
     return var.cuda() if torch.cuda.is_available() else var
 
 def CPU(var):
     return var.cpu().detach()
 
-    # Initialize models
-    dynamics_model = DynamicsModel(
-        env=env,
-        config=config
-    )
+
+class DM(nn.Module):
+    def __init__(self, env, config):
+        super(DM).__init__()
+
+        state_sz = env.observation_space.shape[0]
+
+        self.context = ContextEncoder(config.context.history_sz, state_sz, config.context.hidden_sizes, config.context.out_dim)
+        self.backbone = Backbone(config.backbone.hidden_sizes, state_sz, config.backbone.out_dim)
+        self.reward = RewardModel(state_sz, config.reward.model.hidden_sizes, config.head.ensemble_size, config.backbone.out_dim)
+        self.heads = [Head() for _ in range(config.head.ensemble_size)]
+
+    def forward(self, state, action, history=None):
+        raise NotImplementedError
+
+    def reward(self, state, action, next_state, history=None):
+        raise NotImplementedError
+
+    def context(self, history):
+        raise NotImplementedError
 
 
 class DynamicsModel():
-    def __init__(self, NN_config):
+    def __init__(self, env, config):
         super().__init__()
 
-        model_config = NN_config["model_config"]
-        training_config = NN_config["training_config"]
-        
-        self.state_dim = model_config["state_dim"]
-        self.action_dim = model_config["action_dim"]
-        self.input_dim = self.state_dim+self.action_dim
+        self.state_dim = env.observation_space.shape
+        self.action_dim = env.action_space.shape
+        self.input_dim = self.state_dim + self.action_dim
 
-        self.n_epochs = training_config["n_epochs"]
-        self.lr = training_config["learning_rate"]
-        self.batch_size = training_config["batch_size"]
+        self.n_epochs = config.dynamics.n_epochs
+        self.lr = config.dynamics.learning_rate
+        self.batch_size = config.dynamics.batch_size
         
-        self.save_model_flag = training_config["save_model_flag"]
-        self.save_model_path = training_config["save_model_path"]
+        self.save_model_flag = config.dynamics.save_model_flag
+        self.save_model_path = config.dynamics.save_model_path
         
-        self.validation_flag = training_config["validation_flag"]
-        self.validate_freq = training_config["validation_freq"]
-        self.validation_ratio = training_config["validation_ratio"]
+        self.validation_flag = config.dynamics.validation_flag
+        self.validate_freq = config.dynamics.validation_freq
+        self.validation_ratio = config.dynamics.validation_ratio
 
-        if model_config["load_model"]:
-            self.model = CUDA(torch.load(model_config["model_path"]))
+        if config.dynamics.load_model:
+            self.model = torch.load(config.head["model_path"])
         else:
-            self.model = CUDA(MLPRegression(self.input_dim, self.state_dim, model_config["hidden_sizes"]))
+            self.model = DM(env, config)
 
         self.criterion = nn.MSELoss(reduction='mean')
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)

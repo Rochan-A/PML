@@ -1,10 +1,9 @@
 '''
-@Author: 
-@Email: 
-@Date: 2020-04-15 12:09:20
-@LastEditTime: 2020-05-17 21:01:25
-@Description: 
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
+@Author: Zuxin Liu
+@Email: zuxinl@andrew.cmu.edu
 '''
+
 import numpy as np
 from gym import utils
 from gym.envs.mujoco import mujoco_env

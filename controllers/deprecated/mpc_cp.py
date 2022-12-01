@@ -1,10 +1,8 @@
-'''
+"""
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
 @Author: Zuxin Liu
 @Email: zuxinl@andrew.cmu.edu
-@Date:   2020-03-24 10:42:50
-@LastEditTime: 2020-05-25 16:56:50
-@Description:
-'''
+"""
 
 import numpy as np
 from tqdm import trange, tqdm

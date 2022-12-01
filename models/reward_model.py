@@ -8,6 +8,7 @@ def CUDA(var):
 def CPU(var):
     return var.cpu().detach()
 
+
 class RewardModel(nn.Model):
     def __init__(self, reward_config):
         super().__init__()

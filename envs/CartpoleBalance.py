@@ -1,4 +1,8 @@
 """
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
+@Author: Zuxin Liu
+@Email: zuxinl@andrew.cmu.edu
+
 Classic cart-pole system implemented by Rich Sutton et al.
 Copied from http://incompleteideas.net/sutton/book/code/pole.c
 permalink: https://perma.cc/C9ZM-652R

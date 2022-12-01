@@ -6,67 +6,17 @@ import os.path as osp
 import joblib
 import numpy as np
 
-from tensorboardX import SummaryWriter
-
-    # Initialize Trainer
-    algo = Trainer(
-        env=env,
-        policy=policy,
-        dynamics_model=dynamics_model,
-        config=config,
-        writer=writer,
-        no_test_flag=args.no_test_flag,
-        only_test_flag=args.only_test_flag
-    )
-
 
 class Trainer(object):
-    """
-    Training script for Learning to Adapt
-
-    Args:
-        env (Env) :
-        sampler (Sampler) :
-        sample_processor (SampleProcessor) :
-        policy (Policy) :
-        n_itr (int) : Number of iterations to train for
-        start_itr (int) : Number of iterations policy has already trained for, if reloading
-        initial_random_sampled (bool) : Whether or not to collect random samples in the first iteration
-        dynamics_model_max_epochs (int): Number of epochs to train the dynamics model
-        sess (tf.Session) : current tf session (if we loaded policy, for example)
-    """
-
     def __init__(
         self,
         env,
-        env_flag,
-        sampler,
-        sample_processor,
         policy,
         dynamics_model,
-        n_itr,
+        config,
         writer,
-        start_itr=0,
-        initial_random_samples=True,
-        num_rollouts=10,
-        dynamics_model_max_epochs=200,
-        test_max_epochs=200,
-        sess=None,
-        context=False,
-        num_test=4,
-        test_range=[[1.0, 2.0], [3.0, 4.0], [16.0, 17.0], [18.0, 19.0]],
-        total_test=20,
         no_test_flag=False,
         only_test_flag=False,
-        use_cem=False,
-        horizon=0,
-        test_num_rollouts=10,
-        test_n_parallel=2,
-        history_length=10,
-        state_diff=False,
-        mcl_dynamics_model=None,
-        cadm_n_epochs=0,
-        mcl_cadm=False,
     ):
 
         # Environment Attirubtes

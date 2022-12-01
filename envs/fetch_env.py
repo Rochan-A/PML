@@ -1,3 +1,9 @@
+"""
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
+@Author: Zuxin Liu
+@Email: zuxinl@andrew.cmu.edu
+"""
+
 import numpy as np
 
 from gym.envs.robotics import rotations, utils

@@ -1,34 +1,25 @@
-'''
+"""
+Code borrowed from https://github.com/liuzuxin/MPC_template-model_predictive_control_for_reinforcement_learning
 @Author: Zuxin Liu
 @Email: zuxinl@andrew.cmu.edu
-@Date:   2020-03-24 10:42:50
-@LastEditTime: 2020-05-25 17:26:17
-@Description:
-'''
+"""
 
 import numpy as np
 import copy
 from .optimizers import RandomOptimizer, CEMOptimizer
+import torch
 
-
-    # Initialize Policy
-    policy = MPC(
-        env=env,
-        dynamics_model=dynamics_model,
-        config=config
-    )
 
 class MPC(object):
     optimizers = {"CEM": CEMOptimizer, "Random": RandomOptimizer}
 
-    def __init__(self, mpc_config, reward_model = None):
-        # mpc_config = config["mpc_config"]
+    def __init__(self, mpc_config, reward_model, env):
         self.type = mpc_config["optimizer"]
         conf = mpc_config[self.type]
         self.horizon = conf["horizon"]
         self.gamma = conf["gamma"]
-        self.action_low = np.array(conf["action_low"]) # array (dim,)
-        self.action_high = np.array(conf["action_high"]) # array (dim,)
+        self.action_low = env.action_low # array (dim,)
+        self.action_high = env.action_high # array (dim,)
         self.action_dim = conf["action_dim"]
         self.popsize = conf["popsize"]
 
@@ -97,7 +88,8 @@ class MPC(object):
 
             state_next = self.model.predict(state, action) + state
 
-            cost = -self.reward_model.predict(state_next, action)  # compute cost
+            with torch.no_grad():
+                cost = -self.reward_model.predict(state_next, action)  # compute cost
             cost = cost.reshape(costs.shape)
             costs += cost * self.gamma**t
             state = copy.deepcopy(state_next)
