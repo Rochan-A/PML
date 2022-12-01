@@ -11,9 +11,9 @@ import torch
 
 
 class MPC(object):
-    optimizers = {"CEM": CEMOptimizer, "Random": RandomOptimizer}
+    optimizers = {"CEM": CEMOptimizer, "random": RandomOptimizer}
 
-    def __init__(self, mpc_config, reward_model, env):
+    def __init__(self, mpc_config, reward_model, env, device):
         self.type = mpc_config["optimizer"]
         conf = mpc_config[self.type]
         self.horizon = conf["horizon"]
@@ -22,6 +22,7 @@ class MPC(object):
         self.action_high = env.action_high # array (dim,)
         self.action_dim = conf["action_dim"]
         self.popsize = conf["popsize"]
+        self.device = device
 
         self.particle = conf["particle"]
 
@@ -86,10 +87,13 @@ class MPC(object):
         for t in range(self.horizon):
             action = actions[:, t, :]  # numpy array (batch_size x action dim)
 
-            state_next = self.model.predict(state, action) + state
-
             with torch.no_grad():
-                cost = -self.reward_model.predict(state_next, action)  # compute cost
+                state = torch.Tensor(state).to(dtype=torch.float32, device=self.device)
+                action = torch.Tensor(action).to(dtype=torch.float32, device=self.device)
+
+                state_next = self.model.predict(state, action) + state
+                cost = -self.reward_model.predict(state_next, action).cpu().detach().numpy() # compute cost
+
             cost = cost.reshape(costs.shape)
             costs += cost * self.gamma**t
             state = copy.deepcopy(state_next)

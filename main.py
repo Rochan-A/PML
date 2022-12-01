@@ -5,7 +5,7 @@ from os.path import join
 
 import argparse, datetime
 
-import gym
+import gym, torch
 import sunblaze_envs
 
 from tensorboardX import SummaryWriter
@@ -86,6 +86,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", help="config file")
     parser.add_argument("--root", default="./saves/", help="experiments name")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")
+    parser.add_argument("--cuda", type=int, default=0, help="CUDA device idx")
     parser.add_argument("--env", default="SunblazeCartPole-v0", help="environment name")
     parser.add_argument(
         "--no_test_flag", action="store_true", help="flag to disable test"
@@ -98,6 +99,7 @@ if __name__ == "__main__":
     if args.config is not None:
         with open(args.config) as f:
             config = yaml.safe_load(f)
+        config['device'] = torch.device('cuda:{}'.format(args.cuda)) if torch.cuda.is_available() else torch.device('cpu')
         config = EasyDict(config)
     else:
         raise ValueError(str(args.config))

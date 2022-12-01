@@ -78,13 +78,13 @@ class Head(nn.Module):
 
 
 class RewardModel(nn.Module):
-    def __init__(self, state_size, hidden_layer_size, n_head, backbone_out):
+    def __init__(self, state_size, hidden_layer_size, back_context_out):
         super(RewardModel, self).__init__()
 
         self.flatten = nn.Flatten()
-        self.input_layer = nn.Linear(state_size*n_head + backbone_out, hidden_layer_size)
+        self.input_layer = nn.Linear(state_size + back_context_out, hidden_layer_size)
         self.hidden_layer = nn.Linear(hidden_layer_size, hidden_layer_size)
-        self.output_layer = nn.Linear(hidden_layer_size, state_size)
+        self.output_layer = nn.Linear(hidden_layer_size, 1)
 
         self.linear_relu_stack = nn.Sequential(
             self.input_layer,
@@ -95,8 +95,8 @@ class RewardModel(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, next_states, backbone_out):
-        x = torch.cat((next_states, backbone_out), dim=-1)
+    def forward(self, next_states, back_context_out):
+        x = torch.cat((next_states, back_context_out), dim=-1)
         return self.linear_relu_stack(x)
 
 
@@ -111,5 +111,5 @@ if __name__ == "__main__":
     net = Head(128, 128, 128)
     print(net.forward(torch.zeros((1, 128))).shape)
 
-    net = RewardModel(128, 128, 5, 128)
-    print(net.forward(torch.zeros((1, 5*128)), torch.zeros((1, 128))).shape)
+    net = RewardModel(128, 128, 128)
+    print(net.forward(torch.zeros((1, 128)), torch.zeros((1, 128))).shape)
