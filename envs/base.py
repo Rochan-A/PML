@@ -1,5 +1,5 @@
 import random
-from CartpoleBalance import CartPoleEnv_template
+from .CartpoleBalance import CartPoleEnv_template
 
 # context limits - [low, default, high] TODO: take from sunblaze_envs
 CARTPOLE_BALANCE_LIMITS = {
@@ -39,6 +39,11 @@ class ContexualEnv():
             self.env = CartPoleEnv_template
         else:
             raise NotImplementedError
+
+        context = self.c_train.sample()
+        dummy_env = self.env(**context)
+        self.observation_space = dummy_env.observation_space
+        self.action_space = dummy_env.action_space
 
     def reset(self, train=True):
         if train:

@@ -9,18 +9,35 @@ import torch
 
 from tensorboardX import SummaryWriter
 
-from models import DynamicsModel
+from models import Dynamics
 from controllers.mpc_controller import MPC
 from trainers import Trainer
 from envs import ContexualEnv
 
 
 def make_dirs(directory):
-    """Make dir path if it does not exist"""
+    """Make dir path if it does not exist
+    
+    Args
+    ----
+        path (str): path to create
+    """
     Path(directory).mkdir(parents=True, exist_ok=True)
 
 
 def gen_save_path(args, config):
+    """Generate save path
+
+    Args
+    ----
+        args (argsparse): cmd line args
+        config (easydict): config read from file
+
+    Returns
+    -------
+        path (str)
+    """
+
     PATH = join(args.root, "{}".format(args.env))
 
     if config.normalize_flag:
@@ -46,12 +63,20 @@ def gen_save_path(args, config):
 
 
 def main(args, config, PATH):
+    """Main function
+    
+    Args
+    ----
+        args (argparse): cmd line args
+        config (easydict): config read from file
+        PATH (str): save path
+    """
 
     # Contextual env
     env = ContexualEnv(config)
 
-    # Initialize models
-    dynamics_model = DynamicsModel(
+    # Initialize Dynamics
+    dynamics_model = Dynamics(
         env=env,
         config=config
     )

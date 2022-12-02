@@ -11,6 +11,7 @@ import torch
 
 
 class MPC(object):
+    """MPC Controller"""
     optimizers = {"CEM": CEMOptimizer, "random": RandomOptimizer}
 
     def __init__(self, mpc_config, reward_model, env, device):
@@ -52,9 +53,16 @@ class MPC(object):
         self.init_var = np.tile(np.square(self.action_low - self.action_high) / 16, [self.horizon])
 
     def act(self, model, state):
-        '''
-        :param state: model, (numpy array) current state
-        :return: (float) optimal action
+        '''Take action
+
+        Args
+        ----
+            state (numpy array): current state
+            model (nn.Module): dynamics model
+
+        Returns
+        -------
+            optimal action (float)
         '''
         self.model = model
         self.state = state
@@ -68,15 +76,15 @@ class MPC(object):
         return action
 
     def cost_function(self, actions):
-        """
-        Calculate the cost given a sequence of actions
-        Parameters:
-        ----------
-            @param numpy array - actions : size should be (batch_size x horizon number)
+        """Calculate the cost given a sequence of actions
 
-        Return:
-        ----------
-            @param numpy array - cost : length should be of batch_size
+        Args
+        ----
+            actions (numpy array): size should be (batch_size x horizon number)
+
+        Returns
+        -------
+            cost (numpy array): length should be of batch_size
         """
         actions = actions.reshape((-1, self.horizon, self.action_dim)) # [pop size, horizon, action_dim]
         actions = np.tile(actions, (self.particle, 1, 1))
@@ -103,17 +111,16 @@ class MPC(object):
         return costs
 
     def cartpole_cost_function(self, actions):
-        """
-        Calculate the cost given a sequence of actions
-        Parameters:
-        ----------
-            @param numpy array - actions : size should be (batch_size x horizon number)
+        """Calculate the cost given a sequence of actions
 
-        Return:
-        ----------
-            @param numpy array - cost : length should be of batch_size
-        """
+        Args
+        ----
+            actions (numpy array): size should be (batch_size x horizon number)
 
+        Returns
+        -------
+            cost (numpy array): length should be of batch_size
+        """
         # TODO: may be able to change to tensor like pets
         actions = actions.reshape((-1, self.horizon, self.action_dim)) # [pop size, horizon, action_dim]
         actions = np.tile(actions, (self.particle, 1, 1))
@@ -135,17 +142,16 @@ class MPC(object):
         return costs
 
     def cartpole_cost(self, state, action, env_cost=False, obs=True):
-        """
-        Calculate the cartpole env cost given the state
+        """Calculate the cartpole env cost given the state
 
-        Parameters:
-        ----------
-            @param numpy array - state : size should be (batch_size x state dim)
-            @param numpy array - action : size should be (batch_size x action dim)
+        Args
+        ----
+            state (numpy array): size should be (batch_size x state dim)
+            action (numpy array): size should be (batch_size x action dim)
 
-        Return:
-        ----------
-            @param numpy array - cost : length should be of batch_size
+        Returns
+        -------
+            cost (numpy array): length should be of batch_size
         """
 
         if not obs:

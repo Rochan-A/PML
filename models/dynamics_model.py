@@ -2,51 +2,48 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from base import ContextEncoder, Head, Backbone, RewardModel
+from base import DNet
 
-class DNet(nn.Module):
-    def __init__(self, env, config):
-        super(DNet, self).__init__()
 
-        state_sz = env.observation_space.shape[0]
+class ContextVector:
+    def __init__(self, K, state_sz, action_sz) -> None:
+        self.K = K
+        
+        self.state_sz = state_sz
+        self.action_sz = action_sz
+        self.default_sz = (state_sz+action_sz)*K
+        self.store = None
+        self.prev_st = None
 
-        self.device = config.device
+    def append(self, state, action):
+        if self.prev_st is None:
+            self.prev_st = state
+        else:
+            state = state - self.prev_st
 
-        self.context_enc = ContextEncoder(config.context.history_sz, state_sz, config.context.hidden_sizes, config.context.out_dim).to(device=self.device)
-        self.backbone = Backbone(config.backbone.hidden_sizes, state_sz, config.backbone.out_dim).to(device=self.device)
-        self.reward_enc = [RewardModel(state_sz, config.reward.model.hidden_sizes, config.backbone.out_dim+config.context.out_dim).to(device=self.device) for _ in range(config.head.ensemble_size)]
-        self.heads = [Head(config.backbone.out_dim+config.context.out_dim, config.head.hidden_sizes, state_sz).to(device=self.device) for _ in range(config.head.ensemble_size)]
+        k = np.concatenate([state, action], axis=0)
+        if self.store is None:
+            self.store = np.repeat(k, self.K)
+        else:
+            self.store = np.roll(self.store, -k.shape[0])
+            self.store[-k.shape[0]:] = k
 
-    def forward(self, state, action, history):
-        b_embb = self.backbone.forward(state, action)
-        c_embb = self.context(history)
-        embb = torch.cat([b_embb, c_embb], dim=-1)
-        m_head_out = []
-        for head in self.heads:
-            m_head_out.append(head.forward(embb))
-        return b_embb, c_embb, m_head_out
+    def reset(self):
+        self.store = None
+        self.prev_st = None
 
-    def reward(self, state, action, history=None):
-        b_embb, c_embb, pred_next_state = self.forward(state, action, history)
-        bc_embb = torch.cat([b_embb, c_embb], dim=-1)
-        pred_rews = []
-        for idx in range(len(self.heads)):
-            pred_rews.append(self.reward_enc[idx].forward(pred_next_state[idx], bc_embb))
-        return pred_rews
 
-    def context(self, history):
-        return self.context_enc.forward(history)
-
+mse = nn.MSELoss()
 
 def compute_head_loss(outputs, labels, criterion):
-    raise NotImplementedError
+    return mse(outputs[0], labels)
 
 
 def select_head(outputs, labels, criterion):
     raise NotImplementedError
 
 
-class DynamicsModel():
+class Dynamics():
     def __init__(self, env, config):
         super().__init__()
 
@@ -85,7 +82,7 @@ class DynamicsModel():
             label = data[3] # here label means the (next state - state) [state dim]
             hist_tensor = torch.Tensor(hist).to(dtype=torch.float32, device=self.device)
             state_tensor = torch.Tensor(s).to(dtype=torch.float32, device=self.device)
-            action_tensor = torch.Tensor(a).to(dtype=torch.float32, device=self.device)
+            action_tensor = torch.Tensor([a]).to(dtype=torch.float32, device=self.device)
             label_tensor = torch.Tensor(label).to(dtype=torch.float32, device=self.device)
             data_list.append([hist_tensor, state_tensor, action_tensor, label_tensor])
         return data_list
@@ -144,8 +141,8 @@ class DynamicsModel():
             loss_this_epoch = []
             for hists, states, actions, labels in train_loader:
                 self.optimizer.zero_grad()
-                outputs = self.model.forward(states, actions, hists)
-                loss = compute_head_loss(outputs, labels, self.criterion)
+                bb_embb, c_embb, delta_states = self.model.forward(states, actions, hists)
+                loss = compute_head_loss(delta_states, labels, self.criterion)
                 loss.backward()
                 self.optimizer.step()
                 loss_this_epoch.append(loss.item())
@@ -166,8 +163,8 @@ class DynamicsModel():
     def validate_model(self, testloader):
         loss_list = []
         for hists, states, actions, labels in testloader:
-            outputs = self.model(states, actions, hists)
-            loss = compute_head_loss(outputs, labels, self.criterion)
+            bb_embb, c_embb, delta_states = self.model(states, actions, hists)
+            loss = compute_head_loss(delta_states, labels, self.criterion)
             loss_list.append(loss.item())
         return np.mean(loss_list)
 
@@ -185,33 +182,37 @@ class DynamicsModel():
 
 
 if __name__=='__main__':
-    import gym
-    import sunblaze_envs
-
     import yaml
     from easydict import EasyDict
 
-    with open('./configs/cartpole.yaml') as f:
+    with open('../configs/cartpole.yaml') as f:
         config = yaml.safe_load(f)
+        config['device'] = torch.device('cpu')
     config = EasyDict(config)
 
-    env = sunblaze_envs.make(config.env)
-    state_sz = env.observation_space.shape[0]
+    import sys
+    sys.path.append("..")  # Adds higher directory to python modules path.
 
-    net = DNet(env, config)
+    from envs import ContexualEnv
+    import random
 
-    with torch.no_grad():
-        b_embb, c_embb, m_head_out = net.forward(torch.zeros((1, state_sz)),
-                            torch.zeros((1, 1)),
-                            torch.zeros((1, config.context.history_sz*(state_sz + 1)))
-                            )
-        print("backbone_embb: {}\nhead_out: {}\ncontext_embb: {}\nreward: {}".format(
-                b_embb.shape,
-                m_head_out[0].shape,
-                net.context(torch.zeros((1, config.context.history_sz*(state_sz + 1)))
-                            ).shape,
-                net.reward(torch.zeros((1, state_sz)),
-                            torch.zeros((1, 1)),
-                            torch.zeros((1, config.context.history_sz*(state_sz + 1)))
-                            )[0].shape
-                ))
+    env_fam = ContexualEnv(config)
+    dynamics = Dynamics(env_fam, config)
+    cv = ContextVector(config.context.history_sz, env_fam.observation_space.shape[0], env_fam.action_space.shape[0])
+
+    for _ in range(500):
+        env, context = env_fam.reset(train=True)
+
+        s = env.reset()
+        done = False
+        while not done:
+            a = random.random()*2 - 1
+            cv.append(s, [a])
+            s_, r, done, _ = env.step([a])
+            dynamics.add_data_point([cv.store.copy(), s, a, s_ - s])
+            s = s_
+
+        cv.reset()
+
+    loss = dynamics.fit(dynamics.dataset)
+    print(loss)
