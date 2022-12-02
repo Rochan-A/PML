@@ -26,14 +26,14 @@ class CartPoleSwingUpEnv_template(gym.Env):
         'video.frames_per_second': 100
     }
 
-    def __init__(self, masscart=0.5, masspole=0.5, polelength=0.5):
-        self.g = 9.82  # gravity
+    def __init__(self, masscart=0.5, masspole=0.5, polelength=0.5, gravity=9.8, force_mag=20.0):
+        self.g = gravity  # gravity
         self.m_c = masscart  # cart mass, default 0.5
         self.m_p = masspole  # pendulum mass, default 0.5
         self.total_m = (self.m_p + self.m_c)
         self.l = polelength  # pole's length, default 0.6
         self.m_p_l = (self.m_p * self.l)
-        self.force_mag = 20.0
+        self.force_mag = force_mag
         self.dt = 0.04  # seconds between state updates
         self.tau = 0.02
         self.b = 0.1  # friction coefficient, default 0.1

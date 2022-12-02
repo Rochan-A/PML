@@ -1,13 +1,22 @@
 import random
 from CartpoleBalance import CartPoleEnv_template
+from CartpoleSwingup import CartPoleSwingUpEnv_template
 
 # context limits - [low, default, high] TODO: take from sunblaze_envs
 CARTPOLE_BALANCE_LIMITS = {
-    "masscart": [0.5, 1.0, 2.0],
-    "masspole": [0.05, 0.1, 0.2],
-    "polelength": [0.3, 0.5, 0.7],
-    "gravity": [6.8, 9.8, 12.8],
-    "force_mag": [5.0, 10.0, 15.0]
+    "masscart": [1.0],
+    "masspole": [0.1],
+    "polelength": [0.5],
+    "gravity": [9.8],
+    "force_mag": [10.0]
+}
+
+CARTPOLE_SWINGUP_LIMITS = {
+    "masscart": [0.5],
+    "masspole": [0.5],
+    "polelength": [0.5],
+    "gravity": [9.8],
+    "force_mag": [20.0]
 }
 
 
@@ -37,6 +46,8 @@ class ContexualEnv():
 
         if config.env == 'CarpoleBalance':
             self.env = CartPoleEnv_template
+        elif config.env == 'CartpoleSwingUp':
+            self.env = CartPoleSwingUpEnv_template
         else:
             raise NotImplementedError
 
