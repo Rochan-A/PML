@@ -75,26 +75,11 @@ def main(args, config, PATH):
     # Contextual env
     env = ContexualEnv(config)
 
-    # Initialize Dynamics
-    dynamics_model = Dynamics(
-        env=env,
-        config=config
-    )
-
-    # Initialize Policy
-    policy = MPC(
-        env=env,
-        dynamics_model=dynamics_model,
-        config=config
-    )
-
     writer = SummaryWriter(PATH)
 
     # Initialize Trainer
     algo = Trainer(
         env=env,
-        policy=policy,
-        dynamics_model=dynamics_model,
         config=config,
         writer=writer,
         no_test_flag=args.no_test_flag,

@@ -1,199 +1,200 @@
-import tensorflow as tf
-import time
-
-import os
-import os.path as osp
-import joblib
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import omegaconf
 
+import mbrl.env.cartpole_continuous as cartpole_env
+import mbrl.env.reward_fns as reward_fns
+import mbrl.env.termination_fns as termination_fns
+import models as models
+import mbrl.planning as planning
+import mbrl.util.common as common_util
+import mbrl.util as util
+
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 class Trainer(object):
     def __init__(
         self,
         env,
-        policy,
-        dynamics_model,
         config,
         writer,
         no_test_flag=False,
         only_test_flag=False,
     ):
 
-        # Environment Attirubtes
-        self.env = env
-        self.env_flag = env_flag
+    trial_length = 200
+    num_trials = 10
+    ensemble_size = 5
 
-        # Sampler Attributes
-        self.sampler = sampler
-        self.sample_processor = sample_processor
+    # Everything with "???" indicates an option with a missing value.
+    # Our utility functions will fill in these details using the 
+    # environment information
+    cfg_dict = {
+        # dynamics model configuration
+        "dynamics_model": {
+            "model": 
+            {
+                "_target_": "mbrl.models.GaussianMLP",
+                "device": device,
+                "num_layers": 3,
+                "ensemble_size": ensemble_size,
+                "hid_size": 200,
+                "in_size": "???",
+                "out_size": "???",
+                "deterministic": False,
+                "propagation_method": "fixed_model",
+                # can also configure activation function for GaussianMLP
+                "activation_fn_cfg": {
+                    "_target_": "torch.nn.LeakyReLU",
+                    "negative_slope": 0.01
+                }
+            }
+        },
+        # options for training the dynamics model
+        "algorithm": {
+            "learned_rewards": False,
+            "target_is_delta": True,
+            "normalize": True,
+        },
+        # these are experiment specific options
+        "overrides": {
+            "trial_length": trial_length,
+            "num_steps": num_trials * trial_length,
+            "model_batch_size": 32,
+            "validation_ratio": 0.05
+        }
+    }
+    cfg = omegaconf.OmegaConf.create(cfg_dict)
 
-        # Dynamics Model Attributes
-        self.dynamics_model = dynamics_model
 
-        # Policy Attributes
-        self.policy = policy
-        self.use_cem = use_cem
-        self.horizon = horizon
+    # Create a 1-D dynamics model for this environment
+    dynamics_model = common_util.create_one_dim_tr_model(cfg, obs_shape, act_shape)
 
-        # Algorithm Attributes
-        self.context = context
+    # Create a gym-like environment to encapsulate the model
+    model_env = models.ModelEnv(env, dynamics_model, term_fn, reward_fn, generator=generator)
+    
 
-        # CaDM Attributes
-        self.context = context
-        self.history_length = history_length
-        self.state_diff = state_diff
+    replay_buffer = common_util.create_replay_buffer(cfg, obs_shape, act_shape, rng=rng)
 
-        # MCL Attributes
-        self.mcl_cadm = mcl_cadm
 
-        # Training Attributes
-        self.n_itr = n_itr
-        self.start_itr = start_itr
-        self.num_rollouts = num_rollouts
-        self.dynamics_model_max_epochs = dynamics_model_max_epochs
-        self.test_max_epochs = test_max_epochs
-        self.initial_random_samples = initial_random_samples
+    common_util.rollout_agent_trajectories(
+        env,
+        trial_length, # initial exploration steps
+        planning.RandomAgent(env),
+        {}, # keyword arguments to pass to agent.act()
+        replay_buffer=replay_buffer,
+        trial_length=trial_length
+    )
 
-        # Testing Attributes
-        self.no_test = no_test_flag
-        self.only_test = only_test_flag
-        self.total_test = total_test
-        self.num_test = num_test
-        self.test_range = test_range
-        self.writer = writer
-        self.test_num_rollouts = test_num_rollouts
-        self.test_n_parallel = test_n_parallel
+    print("# samples stored", replay_buffer.num_stored)
+    
+    
+    agent_cfg = omegaconf.OmegaConf.create({
+        # this class evaluates many trajectories and picks the best one
+        "_target_": "mbrl.planning.TrajectoryOptimizerAgent",
+        "planning_horizon": 15,
+        "replan_freq": 1,
+        "verbose": False,
+        "action_lb": "???",
+        "action_ub": "???",
+        # this is the optimizer to generate and choose a trajectory
+        "optimizer_cfg": {
+            "_target_": "mbrl.planning.CEMOptimizer",
+            "num_iterations": 5,
+            "elite_ratio": 0.1,
+            "population_size": 500,
+            "alpha": 0.1,
+            "device": device,
+            "lower_bound": "???",
+            "upper_bound": "???",
+            "return_mean_elites": True,
+        }
+    })
 
-        if sess is None:
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            sess = tf.Session(config=config)
-        self.sess = sess
+    agent = planning.create_trajectory_optim_agent_for_model(
+        model_env,
+        agent_cfg,
+        num_particles=20
+    )
+    
+    
+    train_losses = []
+    val_scores = []
 
-    def train(self):
-        """
-        Collects data and trains the dynamics model
-        """
-        f_test_list = []
-        for i in range(0, self.num_test):
-            file_name = "%s/test_c%d.txt" % (logger.get_dir(), i)
-            f_test = open(file_name, "w+")
-            f_test_list.append(f_test)
+    def train_callback(_model, _total_calls, _epoch, tr_loss, val_score, _best_val):
+        train_losses.append(tr_loss)
+        val_scores.append(val_score.mean().item())   # this returns val score per ensemble model
 
-        file_name = "%s/test_tot.txt" % (logger.get_dir())
-        f_test_tot = open(file_name, "w+")
 
-        file_name = "%s/train.txt" % (logger.get_dir())
-        f_train = open(file_name, "w+")
+    # Create a trainer for the model
+    model_trainer = models.ModelTrainer(dynamics_model, optim_lr=1e-3, weight_decay=5e-5)
 
-        itr_times = []
-        t0 = time.time()
+    # Create visualization objects
+    fig, axs = plt.subplots(1, 2, figsize=(14, 3.75), gridspec_kw={"width_ratios": [1, 1]})
+    ax_text = axs[0].text(300, 50, "")
 
-        test_env_list = []
 
-        train_env = env_cls()
-        train_env.seed(0)
-        train_env = normalize(train_env)
-        for i in range(0, self.num_test):
-            test_env = env_cls(self.test_range[i][0], self.test_range[i][1])
-            test_env.seed(0)
-            test_env = normalize(test_env)
-            vec_test_env = ParallelEnvExecutor(
-                test_env,
-                self.test_n_parallel,
-                self.test_num_rollouts,
-                self.test_max_epochs,
-                True,
-            )
-            test_env_list.append(vec_test_env)
 
-        if len(train_env.action_space.shape) == 0:
-            act_dim = train_env.action_space.n
-            discrete = True
-        else:
-            act_dim = train_env.action_space.shape[0]
-            discrete = False
+    def run(self):
 
-        if args.use_reward_model:
-            reward_config["model_config"]["load_model"] = True
-            reward_model = RewardModel(reward_config=reward_config)
-        else:
-            reward_model = None
-
-        # initial MPC controller
-        mpc_controller = MPC(mpc_config=mpc_config, reward_model=reward_model)
-
-        if args.train_reward_model:
-            reward_model = RewardModel(reward_config=reward_config)
-        """NN pretrain"""
-        pretrain_episodes = 40
-        for epi in range(pretrain_episodes):
-            obs = env.reset()
-            done = False
-            while not done:
-                action = env.action_space.sample()
-                obs_next, reward, done, state_next = env.step(action)
-                model.add_data_point([0, obs, action, obs_next - obs])
-                if args.train_reward_model: 
-                    reward_model.add_data_point([0, obs_next, action, [reward]])
-                obs = obs_next
-        # training the model
-        model.fit()
-        if args.train_reward_model:
-            print("********** fitting reward model **********")
-            reward_model.fit()
-
-        """testing the model with MPC while training """
-        test_episode = 3
-        test_epoch = 20
-        
-        for ep in range(test_epoch):
-            print('epoch: ', ep)
+        # Main PETS loop
+        all_rewards = [0]
+        for trial in range(num_trials):
+            obs = env.reset()    
+            agent.reset()
             
-            for epi in range(test_episode):
-                obs = env.reset()
-                acc_reward, done = 0, False
-                mpc_controller.reset()
-                i = 0
-                while not done:
-                    i+= 1
-                    if args.render:
-                        env.render()
-                    action = np.array([mpc_controller.act(model=model, state=obs)])
-                    obs_next, reward, done, state_next = env.step(action)
+            done = False
+            total_reward = 0.0
+            steps_trial = 0
+            update_axes(axs, None, ax_text, trial, steps_trial, all_rewards)
+            while not done:
+                # --------------- Model Training -----------------
+                if steps_trial == 0:
+                    dynamics_model.update_normalizer(replay_buffer.get_all())  # update normalizer stats
+                    
+                    dataset_train, dataset_val = common_util.get_basic_buffer_iterators(
+                        replay_buffer,
+                        batch_size=cfg.overrides.model_batch_size,
+                        val_ratio=cfg.overrides.validation_ratio,
+                        ensemble_size=ensemble_size,
+                        shuffle_each_epoch=True,
+                        bootstrap_permutes=False,  # build bootstrap dataset using sampling with replacement
+                    )
+                        
+                    model_trainer.train(
+                        dataset_train, 
+                        dataset_val=dataset_val, 
+                        num_epochs=50, 
+                        patience=50, 
+                        callback=train_callback,
+                    )
 
-                    model.add_data_point([0, obs, action, obs_next - obs])
-                    if args.train_reward_model: 
-                        reward_model.add_data_point([0, obs_next, action, [reward]])
+                # --- Doing env step using the agent and adding to model dataset ---
+                next_obs, reward, done, _ = common_util.step_env_and_add_to_buffer(
+                    env, obs, agent, {}, replay_buffer)
+                    
+                update_axes(
+                    axs, None, ax_text, trial, steps_trial, all_rewards)
+                
+                obs = next_obs
+                total_reward += reward
+                steps_trial += 1
+                
+                if steps_trial == trial_length:
+                    break
+            
+            all_rewards.append(total_reward)
 
-                    obs = obs_next
-                    acc_reward += reward
+        update_axes(axs, None, ax_text, trial, steps_trial, all_rewards, force_update=True)
+        
 
-                print('step: ', i, 'acc_reward: ', acc_reward)
-                env.close()
-
-                if done:
-                    print('******************')
-                    print('acc_reward', acc_reward)
-
-            print('********** fitting the dynamic model **********')
-            model.fit()
-            if args.train_reward_model:
-                print("********** fitting reward model **********")
-                reward_model.fit()
-
-
-    def get_itr_snapshot(self, itr):
-        """
-        Gets the current policy, env, and dynamics model for storage
-        """
-        return dict(
-            itr=itr,
-            policy=self.policy,
-            env=self.env,
-            dynamics_model=self.dynamics_model,
-        )
-
-    def log_diagnostics(self, paths, prefix):
-        self.env.log_diagnostics(paths, prefix)
-        self.policy.log_diagnostics(paths, prefix)
+        fig, ax = plt.subplots(2, 1, figsize=(12, 10))
+        ax[0].plot(train_losses)
+        ax[0].set_xlabel("Total training epochs")
+        ax[0].set_ylabel("Training loss (avg. NLL)")
+        ax[1].plot(val_scores)
+        ax[1].set_xlabel("Total training epochs")
+        ax[1].set_ylabel("Validation score (avg. MSE)")
+        plt.show()
