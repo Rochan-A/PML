@@ -1,11 +1,11 @@
 # Environment configuration
 env: CarpoleBalance          # env name
 train_params:                     # model contexts for training
-- masscart: [0.25, 0.5, 1.5, 2.5]
-  masspole: [0.5, 1.0, 1.5, 2.0]
-  polelength: [0.3, 0.5, 0.7]
-  gravity: [6.8, 9.8, 12.8]
-  force_mag: [5.0, 10.0, 15.0]
+- masscart: [1., 1.1]
+  masspole: [0.1, 0.2]
+  polelength: [0.5, 0.6]
+  gravity: [9.8, 10.0]
+  force_mag: [10.0, 10.1]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
@@ -14,6 +14,8 @@ test_range:                       # model contexts for testing
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
 normalize_flag: False             # normalize state
+trail_length: 200
+num_trials: 10
 
 # MPC controller configuration
 MPC:
@@ -43,27 +45,22 @@ MPC:
 
 # Model arch parameters
 context:
-  load_model: False
-  model_path: "./saves/context.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
+  hidden_dim: 256
+  hidden_layers: 1
   out_dim: 128
-  history_sz: 16
+  history_size: 16
+
+backbone:
+  hidden_dim: 256
+  hidden_layers: 1
+  out_dim: 128
 
 head:
   load_model: False
   model_path: "./saves/head.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
+  hidden_dim: 256
+  hidden_layers: 1
   ensemble_size: 5
-
-backbone:
-  load_model: False
-  model_path: "./saves/backbone.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
-  ensemble_size: 5
-  out_dim: 128
 
 # Dynamics model training config
 dynamics:

@@ -14,7 +14,7 @@ import mbrl.util.math
 
 from mbrl.models.model import Ensemble, Model
 import hydra
-from base import Backbone, ContextEncoder
+from .base import Backbone, ContextEncoder
 
 
 class TransitionRewardModel(Model):
@@ -82,12 +82,10 @@ class TransitionRewardModel(Model):
     def _get_model_input(
         self,
         obs,
-        action,
-        history
+        action
     ) -> torch.Tensor:
         obs = model_util.to_tensor(obs).to(self.device)
         action = model_util.to_tensor(action).to(self.device)
-        history = model_util.to_tensor(history).to(self.device)
         model_in = torch.cat([obs, action], dim=obs.ndim - 1)
         if self.input_normalizer:
             # Normalizer lives on device
@@ -100,8 +98,6 @@ class TransitionRewardModel(Model):
         obs, action, next_obs, reward, _ = batch.astuple()
         if self.target_is_delta:
             target_obs = next_obs - obs
-            for dim in self.no_delta_list:
-                target_obs[..., dim] = next_obs[..., dim]
         else:
             target_obs = next_obs
         target_obs = model_util.to_tensor(target_obs).to(self.device)
@@ -135,8 +131,6 @@ class TransitionRewardModel(Model):
         if obs.ndim == 1:
             obs = obs[None, :]
             action = action[None, :]
-        if self.obs_process_fn:
-            obs = self.obs_process_fn(obs)
         model_in_np = np.concatenate([obs, action], axis=obs.ndim - 1)
         self.input_normalizer.update_stats(model_in_np)
 
@@ -260,8 +254,6 @@ class TransitionRewardModel(Model):
         next_observs = preds[:, :-1] if self.learned_rewards else preds
         if self.target_is_delta:
             tmp_ = next_observs + obs
-            for dim in self.no_delta_list:
-                tmp_[:, dim] = next_observs[:, dim]
             next_observs = tmp_
         rewards = preds[:, -1:] if self.learned_rewards else None
         next_model_state["obs"] = next_observs
@@ -356,7 +348,7 @@ def create_model(
     """
     model_cfg = cfg.dynamics_model.model
     if model_cfg.get("out_size", None) is None:
-        model_cfg.out_size = context_cfg['state_sz'] + int(cfg.algorithm.learned_rewards)
+        model_cfg.out_size = context_cfg.state_sz + int(cfg.algorithm.learned_rewards)
 
     # Now instantiate the model
     model = hydra.utils.instantiate(cfg.dynamics_model.model)
@@ -386,6 +378,24 @@ if __name__=='__main__':
     num_trials = 10
     ensemble_size = 5
 
+    context_cfg = {
+        'state_sz': 6,
+        'action_sz': 1,
+        'hidden_dim': 128,
+        'hidden_layers': 1,
+        'out_dim': 32,
+        'history_size': 16
+    }
+
+    backbone_cfg = {
+        'state_sz': 6,
+        'action_sz': 1,
+        'hidden_dim': 128,
+        'hidden_layers': 1,
+        'out_dim': 32
+    }
+
+
     # Everything with "???" indicates an option with a missing value.
     # Our utility functions will fill in these details using the
     # environment information
@@ -398,8 +408,8 @@ if __name__=='__main__':
                 "device": 'cpu',
                 "num_layers": 3,
                 "ensemble_size": ensemble_size,
-                "hid_size": 200,
-                "in_size": 256,
+                "hid_size": 128,
+                "in_size": context_cfg['out_dim']+backbone_cfg['out_dim'],
                 "out_size": "???",
                 "deterministic": False,
                 "propagation_method": "fixed_model",
@@ -426,25 +436,8 @@ if __name__=='__main__':
     }
     cfg = omegaconf.OmegaConf.create(cfg_dict)
 
-    context_cfg = {
-        'state_sz': 6,
-        'action_sz': 1,
-        'hidden_dim': 256,
-        'hidden_layers': 1,
-        'out_dim': 256,
-        'history_size': 16
-    }
-
-    backbone_cfg = {
-        'state_sz': 6,
-        'action_sz': 1,
-        'hidden_dim': 256,
-        'hidden_layers': 1,
-        'out_dim': 256
-    }
-
     dynamics_model = create_model(cfg, context_cfg, backbone_cfg)
-    print(dynamics_model.forward(torch.zeros((5, 129)), propagation_indices=[0, 1, 2, 3, 4]))
+    print(dynamics_model.forward(torch.zeros((10, 64)), propagation_indices=[0, 1, 2, 3, 4, 0, 1, 2, 3, 4]))
 
-    model = mbrl.models.gaussian_mlp.GaussianMLP(129, 2, torch.device('cpu'), ensemble_size=5, propagation_method="random_model")
-    print(model.forward(torch.zeros((5, 129))))
+    model = mbrl.models.gaussian_mlp.GaussianMLP(64, 2, torch.device('cpu'), ensemble_size=5, propagation_method="random_model")
+    print(model.forward(torch.zeros((10, 64))))

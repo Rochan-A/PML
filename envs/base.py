@@ -1,6 +1,6 @@
 import random
-from CartpoleBalance import CartPoleEnv_template
-from CartpoleSwingup import CartPoleSwingUpEnv_template
+from .CartpoleBalance import CartPoleEnv_template
+from .CartpoleSwingup import CartPoleSwingUpEnv_template
 
 # context limits - [low, default, high] TODO: take from sunblaze_envs
 CARTPOLE_BALANCE_LIMITS = {

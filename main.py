@@ -9,8 +9,6 @@ import torch
 
 from tensorboardX import SummaryWriter
 
-from models import Dynamics
-from controllers.mpc_controller import MPC
 from trainers import Trainer
 from envs import ContexualEnv
 
@@ -73,7 +71,8 @@ def main(args, config, PATH):
     """
 
     # Contextual env
-    env = ContexualEnv(config)
+    env_fam = ContexualEnv(config)
+    env, _ = env_fam.reset()
 
     writer = SummaryWriter(PATH)
 
@@ -86,7 +85,9 @@ def main(args, config, PATH):
         only_test_flag=args.only_test_flag
     )
 
-    algo.run()
+    train_losses, val_scores = algo.run(env)
+    
+    algo.plot(train_losses, val_scores, 'plot.png')
 
 
 if __name__ == "__main__":
