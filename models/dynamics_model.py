@@ -14,34 +14,6 @@ import torch
 import mbrl.types
 
 
-class RollingHistoryContext:
-    def __init__(self, K, state_sz, action_sz) -> None:
-        self.K = K
-        
-        self.state_sz = state_sz
-        self.action_sz = action_sz
-        self.default_sz = (state_sz+action_sz)*K
-        self.store = None
-        self.prev_st = None
-
-    def append(self, state, action):
-        if self.prev_st is None:
-            self.prev_st = state
-        else:
-            state = state - self.prev_st
-
-        k = np.concatenate([state, action], axis=0)
-        if self.store is None:
-            self.store = np.repeat(k, self.K)
-        else:
-            self.store = np.roll(self.store, -k.shape[0])
-            self.store[-k.shape[0]:] = k
-
-    def reset(self):
-        self.store = None
-        self.prev_st = None
-
-
 class ModelEnv:
     """Wraps a dynamics model into a gym-like environment.
 
@@ -115,6 +87,7 @@ class ModelEnv:
         self,
         actions: mbrl.types.TensorType,
         model_state: Dict[str, torch.Tensor],
+        context = None,
         sample: bool = False,
     ) -> Tuple[mbrl.types.TensorType, mbrl.types.TensorType, np.ndarray, Dict]:
         """Steps the model environment with the given batch of actions.
@@ -126,6 +99,7 @@ class ModelEnv:
                 batch size used when calling :meth:`reset`. If a np.ndarray is given, it's
                 converted to a torch.Tensor and sent to the model device.
             model_state (dict(str, tensor)): the model state as returned by :meth:`reset()`.
+            context (torch.Tensor or np.ndarray, Optional): the context to use.
             sample (bool): if ``True`` model predictions are stochastic. Defaults to ``False``.
 
         Returns:
@@ -145,6 +119,7 @@ class ModelEnv:
             ) = self.dynamics_model.sample(
                 actions,
                 model_state,
+                context,
                 deterministic=not sample,
                 rng=self._rng,
             )
@@ -174,6 +149,7 @@ class ModelEnv:
         action_sequences: torch.Tensor,
         initial_state: np.ndarray,
         num_particles: int,
+        initial_context=None
     ) -> torch.Tensor:
         """Evaluates a batch of action sequences on the model.
 
@@ -184,6 +160,7 @@ class ModelEnv:
             initial_state (np.ndarray): the initial state for the trajectories.
             num_particles (int): number of times each action sequence is replicated. The final
                 value of the sequence will be the average over its particles values.
+            initial_context (np.ndarray, Optional): context for the rollout
 
         Returns:
             (torch.Tensor): the accumulated reward for each action sequence, averaged over its
@@ -206,7 +183,7 @@ class ModelEnv:
                 actions_for_step, num_particles, dim=0
             )
             _, rewards, dones, model_state = self.step(
-                action_batch, model_state, sample=True
+                action_batch, model_state, initial_context, sample=True
             )
             rewards[terminated] = 0
             terminated |= dones

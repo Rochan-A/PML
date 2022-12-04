@@ -13,6 +13,7 @@ import mbrl.types
 import mbrl.util.math
 
 from mbrl.models.model import Ensemble, Model
+from mbrl.models.util import EnsembleLinearLayer, truncated_normal_init
 import hydra
 from .base import Backbone, ContextEncoder
 
@@ -96,7 +97,7 @@ class TransitionRewardModel(Model):
         obs = model_util.to_tensor(obs).to(self.device)
         action = model_util.to_tensor(action).to(self.device)
         d = [obs, action]
-        if context:
+        if context is not None:
             context = model_util.to_tensor(context).to(self.device)
             d = [context,] + d
         model_in = torch.cat(d, dim=obs.ndim - 1)
@@ -113,7 +114,7 @@ class TransitionRewardModel(Model):
             obs, action, next_obs, reward, _ = bb
             context = None
         else:
-            context, obs, action, next_obs, reward, _ = bb
+            obs, action, next_obs, reward, _, context = bb
         if self.target_is_delta:
             target_obs = next_obs - obs
         else:
@@ -176,11 +177,17 @@ class TransitionRewardModel(Model):
         # split model_in -> [context, state, action]
         loss = 0
         if self.use_context:
-            context, sa_t = model_in[:self.context_enc.in_dim, :], model_in[self.context_enc.in_dim:, :]
-            c_embb = self.context_enc.forward(context)
-            # loss += TODO: loss for context_enc
-            b_embb = self.backbone_enc.forward(sa_t)
-            model_in = torch.cat([c_embb, b_embb], dim=0)
+            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            # print('before: ', context.shape)
+            s = context.shape
+            if len(s) == 3:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], s[1], -1)
+            else:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], -1)
+            # print('after: ', c_embb.shape)
+            b_embb = self.backbone_enc.forward(s_t, a_t)
+            # print(b_embb.shape)
+            model_in = torch.cat([c_embb, b_embb], dim=-1)
         loss += self.model.loss(model_in, target=target)
         return loss
 
@@ -202,8 +209,18 @@ class TransitionRewardModel(Model):
         assert target is None
         model_in, target = self._process_batch(batch)
         if self.use_context:
-            # TODO:
-            a = 0
+            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            # print('before: ', context.shape)
+            s = context.shape
+            if len(s) == 3:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], s[1], -1)
+            else:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], -1)
+            # print('after: ', c_embb.shape)
+            # loss += TODO: loss for context_enc
+            b_embb = self.backbone_enc.forward(s_t, a_t)
+            # print(b_embb.shape)
+            model_in = torch.cat([c_embb, b_embb], dim=-1)
         return self.model.update(model_in, optimizer, target=target)
 
     def eval_score(
@@ -226,8 +243,18 @@ class TransitionRewardModel(Model):
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
             if self.use_context:
-                # TODO:
-                a = 0
+                context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+                # print('before: ', context.shape)
+                s = context.shape
+                if len(s) == 3:
+                    c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], s[1], -1)
+                else:
+                    c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], -1)
+                # print('after: ', c_embb.shape)
+                # loss += TODO: loss for context_enc
+                b_embb = self.backbone_enc.forward(s_t, a_t)
+                # print(b_embb.shape)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
             return self.model.eval_score(model_in, target=target)
 
     def get_output_and_targets(
@@ -248,8 +275,18 @@ class TransitionRewardModel(Model):
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
             if self.use_context:
-                # TODO:
-                a = 0
+                context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+                # print('before: ', context.shape)
+                s = context.shape
+                if len(s) == 3:
+                    c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], s[1], -1)
+                else:
+                    c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], -1)
+                # print('after: ', c_embb.shape)
+                # loss += TODO: loss for context_enc
+                b_embb = self.backbone_enc.forward(s_t, a_t)
+                # print(b_embb.shape)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
             output = self.model.forward(model_in)
         return output, target
 
@@ -257,6 +294,7 @@ class TransitionRewardModel(Model):
         self,
         act: torch.Tensor,
         model_state: Dict[str, torch.Tensor],
+        initial_context = None,
         deterministic: bool = False,
         rng: Optional[torch.Generator] = None,
     ) -> Tuple[
@@ -281,14 +319,31 @@ class TransitionRewardModel(Model):
             (tuple of two tensors): predicted next_observation (o_{t+1}) and rewards (r_{t+1}).
         """
         obs = model_util.to_tensor(model_state["obs"]).to(self.device)
-        if self.use_context:
-            # TODO:
-            a = 0
-        model_in = self._get_model_input(model_state["obs"], act)
+
+        if initial_context is not None:
+            if len(initial_context.shape) == 1 and len(model_state["obs"].shape) == 2:
+                initial_context = np.repeat(initial_context[None, :], model_state["obs"].shape[0], axis=0).astype(np.float32)
+
+        model_in = self._get_model_input(model_state["obs"], act, initial_context)
         if not hasattr(self.model, "sample_1d"):
             raise RuntimeError(
                 "OneDTransitionRewardModel requires wrapped model to define method sample_1d"
             )
+
+        if self.use_context:
+            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            # print('before: ', context.shape)
+            s = context.shape
+            if len(s) == 3:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], s[1], -1)
+            else:
+                c_embb = self.context_enc.forward(context.reshape(-1, context.shape[-1])).reshape(s[0], -1)
+            # print('after: ', c_embb.shape)
+            # loss += TODO: loss for context_enc
+            b_embb = self.backbone_enc.forward(s_t, a_t)
+            # print(b_embb.shape)
+            model_in = torch.cat([c_embb, b_embb], dim=-1)
+
         preds, next_model_state = self.model.sample_1d(
             model_in, model_state, rng=rng, deterministic=deterministic
         )
@@ -352,6 +407,7 @@ def create_model(
     cfg,
     context_cfg,
     backbone_cfg,
+    use_context,
     model_dir: Optional[Union[str, pathlib.Path]] = None,
 ):
     """Creates a transition-reward model from a given configuration.
@@ -398,6 +454,7 @@ def create_model(
         model,
         context_cfg,
         backbone_cfg,
+        use_context=use_context,
         target_is_delta=cfg.algorithm.target_is_delta,
         normalize=cfg.algorithm.normalize,
         normalize_double_precision=cfg.algorithm.get(
@@ -445,7 +502,7 @@ if __name__=='__main__':
         "dynamics_model": {
             "model":
             {
-                "_target_": "mbrl.models.GaussianMLP",
+                "_target_": "GaussianMLP",
                 "device": 'cpu',
                 "num_layers": 3,
                 "ensemble_size": ensemble_size,

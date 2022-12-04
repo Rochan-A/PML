@@ -8,37 +8,114 @@ from typing import Any, List, Optional, Sequence, Sized, Tuple, Type, Union
 
 import numpy as np
 
-from mbrl.types import TransitionBatch
+from dataclasses import dataclass
+from typing import Callable, Optional, Tuple, Union
+
+import numpy as np
+import torch
+
+RewardFnType = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+TermFnType = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+ObsProcessFnType = Callable[[np.ndarray], np.ndarray]
+TensorType = Union[torch.Tensor, np.ndarray]
+TrajectoryEvalFnType = Callable[[TensorType, torch.Tensor], torch.Tensor]
 
 
-def create_replay_buffer(cfg, obs_shape, act_shape, rng=None):
-    dataset_size = (
-        cfg.algorithm.get("dataset_size", None) if "algorithm" in cfg else None
-    )
-    if not dataset_size:
-        dataset_size = cfg.overrides.num_steps
-    maybe_max_trajectory_len = None
+@dataclass
+class TransitionBatch:
+    """Represents a batch of transitions"""
 
-    if cfg.overrides.trial_length is None:
-        raise ValueError(
-            "cfg.overrides.trial_length must be set when "
-            "collect_trajectories==True."
+    obs: Optional[TensorType]
+    act: Optional[TensorType]
+    next_obs: Optional[TensorType]
+    rewards: Optional[TensorType]
+    dones: Optional[TensorType]
+
+    def __len__(self):
+        return self.obs.shape[0]
+
+    def astuple(self):
+        return self.obs, self.act, self.next_obs, self.rewards, self.dones
+
+    def __getitem__(self, item):
+        return TransitionBatch(
+            self.obs[item],
+            self.act[item],
+            self.next_obs[item],
+            self.rewards[item],
+            self.dones[item],
         )
-    maybe_max_trajectory_len = cfg.overrides.trial_length
 
-    replay_buffer = ReplayBuffer(
-        dataset_size,
-        obs_shape,
-        act_shape,
-        rng=rng,
-        max_trajectory_length=maybe_max_trajectory_len,
-    )
+    @staticmethod
+    def _get_new_shape(old_shape: Tuple[int, ...], batch_size: int):
+        new_shape = list((1,) + old_shape)
+        new_shape[0] = batch_size
+        new_shape[1] = old_shape[0] // batch_size
+        return tuple(new_shape)
 
-    if load_dir:
-        load_dir = pathlib.Path(load_dir)
-        replay_buffer.load(str(load_dir))
+    def add_new_batch_dim(self, batch_size: int):
+        if not len(self) % batch_size == 0:
+            raise ValueError(
+                "Current batch of transitions size is not a "
+                "multiple of the new batch size. "
+            )
+        return TransitionBatch(
+            self.obs.reshape(self._get_new_shape(self.obs.shape, batch_size)),
+            self.act.reshape(self._get_new_shape(self.act.shape, batch_size)),
+            self.next_obs.reshape(self._get_new_shape(self.obs.shape, batch_size)),
+            self.rewards.reshape(self._get_new_shape(self.rewards.shape, batch_size)),
+            self.dones.reshape(self._get_new_shape(self.dones.shape, batch_size)),
+        )
 
-    return replay_buffer
+
+@dataclass
+class TransitionBatchContext:
+    """Represents a batch of transitions"""
+
+    obs: Optional[TensorType]
+    act: Optional[TensorType]
+    next_obs: Optional[TensorType]
+    rewards: Optional[TensorType]
+    dones: Optional[TensorType]
+    context: Optional[TensorType]
+
+    def __len__(self):
+        return self.obs.shape[0]
+
+    def astuple(self):
+        return self.obs, self.act, self.next_obs, self.rewards, self.dones, self.context
+
+    def __getitem__(self, item):
+        return TransitionBatchContext(
+            self.obs[item],
+            self.act[item],
+            self.next_obs[item],
+            self.rewards[item],
+            self.dones[item],
+            self.context[item],
+        )
+
+    @staticmethod
+    def _get_new_shape(old_shape: Tuple[int, ...], batch_size: int):
+        new_shape = list((1,) + old_shape)
+        new_shape[0] = batch_size
+        new_shape[1] = old_shape[0] // batch_size
+        return tuple(new_shape)
+
+    def add_new_batch_dim(self, batch_size: int):
+        if not len(self) % batch_size == 0:
+            raise ValueError(
+                "Current batch of transitions size is not a "
+                "multiple of the new batch size. "
+            )
+        return TransitionBatchContext(
+            self.obs.reshape(self._get_new_shape(self.obs.shape, batch_size)),
+            self.act.reshape(self._get_new_shape(self.act.shape, batch_size)),
+            self.next_obs.reshape(self._get_new_shape(self.obs.shape, batch_size)),
+            self.rewards.reshape(self._get_new_shape(self.rewards.shape, batch_size)),
+            self.dones.reshape(self._get_new_shape(self.dones.shape, batch_size)),
+            self.context.reshape(self._get_new_shape(self.context.shape, batch_size)),
+        )
 
 
 class ReplayBuffer:
@@ -75,6 +152,7 @@ class ReplayBuffer:
         obs_type: Type = np.float32,
         action_type: Type = np.float32,
         reward_type: Type = np.float32,
+        context_len = None,
         rng: Optional[np.random.Generator] = None,
         max_trajectory_length: Optional[int] = None,
     ):
@@ -92,6 +170,9 @@ class ReplayBuffer:
         self.action = np.empty((capacity, *action_shape), dtype=action_type)
         self.reward = np.empty(capacity, dtype=reward_type)
         self.done = np.empty(capacity, dtype=bool)
+        self.context_len = context_len
+        if context_len:
+            self.context = np.empty((capacity, (obs_shape[0]+action_shape[0])*context_len), dtype=obs_type)
 
         if rng is None:
             self._rng = np.random.default_rng()
@@ -164,8 +245,9 @@ class ReplayBuffer:
         next_obs: np.ndarray,
         reward: float,
         done: bool,
+        context = None
     ):
-        """Adds a transition (s, a, s', r, done) to the replay buffer.
+        """Adds a transition (s, a, s', r, done, <optional: context>) to the replay buffer.
 
         Args:
             obs (np.ndarray): the observation at time t.
@@ -179,6 +261,8 @@ class ReplayBuffer:
         self.action[self.cur_idx] = action
         self.reward[self.cur_idx] = reward
         self.done[self.cur_idx] = done
+        if self.context_len:
+            self.context[self.cur_idx] = context
 
         if self.trajectory_indices is not None:
             self._trajectory_bookkeeping(done)
@@ -222,8 +306,11 @@ class ReplayBuffer:
         action = self.action[indices]
         reward = self.reward[indices]
         done = self.done[indices]
-
-        return TransitionBatch(obs, action, next_obs, reward, done)
+        if self.context_len:
+            context = self.context[indices]
+            return TransitionBatchContext(obs, action, next_obs, reward, done, context)
+        else:
+            return TransitionBatch(obs, action, next_obs, reward, done)
 
     def __len__(self):
         return self.num_stored
@@ -273,13 +360,23 @@ class ReplayBuffer:
             permutation = self._rng.permutation(self.num_stored)
             return self._batch_from_indices(permutation)
         else:
-            return TransitionBatch(
-                self.obs[: self.num_stored],
-                self.action[: self.num_stored],
-                self.next_obs[: self.num_stored],
-                self.reward[: self.num_stored],
-                self.done[: self.num_stored],
-            )
+            if self.context_len:
+                 return TransitionBatchContext(
+                    self.obs[: self.num_stored],
+                    self.action[: self.num_stored],
+                    self.next_obs[: self.num_stored],
+                    self.reward[: self.num_stored],
+                    self.done[: self.num_stored],
+                    self.context[: self.num_stored],
+                )
+            else:
+                return TransitionBatch(
+                    self.obs[: self.num_stored],
+                    self.action[: self.num_stored],
+                    self.next_obs[: self.num_stored],
+                    self.reward[: self.num_stored],
+                    self.done[: self.num_stored],
+                )
 
     def get_iterators(
         self,
@@ -331,3 +428,258 @@ class ReplayBuffer:
     @property
     def rng(self) -> np.random.Generator:
         return self._rng
+
+
+def create_replay_buffer(cfg, obs_shape, act_shape, context_len=None, rng=None, load_dir=None):
+    dataset_size = (
+        cfg.algorithm.get("dataset_size", None) if "algorithm" in cfg else None
+    )
+    if not dataset_size:
+        dataset_size = cfg.overrides.num_steps
+    maybe_max_trajectory_len = None
+
+    if cfg.overrides.trial_length is None:
+        raise ValueError(
+            "cfg.overrides.trial_length must be set when "
+            "collect_trajectories==True."
+        )
+    maybe_max_trajectory_len = cfg.overrides.trial_length
+
+    replay_buffer = ReplayBuffer(
+        dataset_size,
+        obs_shape,
+        act_shape,
+        context_len=context_len,
+        rng=rng,
+        max_trajectory_length=maybe_max_trajectory_len,
+    )
+
+    if load_dir:
+        load_dir = pathlib.Path(load_dir)
+        replay_buffer.load(str(load_dir))
+
+    return replay_buffer
+
+
+def _consolidate_batches(batches):
+    len_batches = len(batches)
+    b0 = batches[0]
+    obs = np.empty((len_batches,) + b0.obs.shape, dtype=b0.obs.dtype)
+    act = np.empty((len_batches,) + b0.act.shape, dtype=b0.act.dtype)
+    next_obs = np.empty((len_batches,) + b0.obs.shape, dtype=b0.obs.dtype)
+    rewards = np.empty((len_batches,) + b0.rewards.shape, dtype=np.float32)
+    dones = np.empty((len_batches,) + b0.dones.shape, dtype=bool)
+    if isinstance(b0, TransitionBatchContext):
+        contexts = np.empty((len_batches,) + b0.context.shape, dtype=np.float32)
+    for i, b in enumerate(batches):
+        obs[i] = b.obs
+        act[i] = b.act
+        next_obs[i] = b.next_obs
+        rewards[i] = b.rewards
+        dones[i] = b.dones
+        if isinstance(b0, TransitionBatchContext):
+            contexts[i] = b.context
+    if isinstance(b0, TransitionBatchContext):
+        return TransitionBatchContext(obs, act, next_obs, rewards, dones, contexts)
+    else:
+        return TransitionBatch(obs, act, next_obs, rewards, dones)
+
+
+class TransitionIterator:
+    """An iterator for batches of transitions.
+
+    The iterator can be used doing:
+
+    .. code-block:: python
+
+       for batch in batch_iterator:
+           do_something_with_batch()
+
+    Rather than be constructed directly, the preferred way to use objects of this class
+    is for the user to obtain them from :class:`ReplayBuffer`.
+
+    Args:
+        transitions (:class:`TransitionBatch`): the transition data used to built
+            the iterator.
+        batch_size (int): the batch size to use when iterating over the stored data.
+        shuffle_each_epoch (bool): if ``True`` the iteration order is shuffled everytime a
+            loop over the data is completed. Defaults to ``False``.
+        rng (np.random.Generator, optional): a random number generator when sampling
+            batches. If None (default value), a new default generator will be used.
+    """
+
+    def __init__(
+        self,
+        transitions,
+        batch_size: int,
+        shuffle_each_epoch: bool = False,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        self.transitions = transitions
+        self.num_stored = len(transitions)
+        self._order: np.ndarray = np.arange(self.num_stored)
+        self.batch_size = batch_size
+        self._current_batch = 0
+        self._shuffle_each_epoch = shuffle_each_epoch
+        self._rng = rng if rng is not None else np.random.default_rng()
+
+    def _get_indices_next_batch(self) -> Sized:
+        start_idx = self._current_batch * self.batch_size
+        if start_idx >= self.num_stored:
+            raise StopIteration
+        end_idx = min((self._current_batch + 1) * self.batch_size, self.num_stored)
+        order_indices = range(start_idx, end_idx)
+        indices = self._order[order_indices]
+        self._current_batch += 1
+        return indices
+
+    def __iter__(self):
+        self._current_batch = 0
+        if self._shuffle_each_epoch:
+            self._order = self._rng.permutation(self.num_stored)
+        return self
+
+    def __next__(self):
+        return self[self._get_indices_next_batch()]
+
+    def ensemble_size(self):
+        return 0
+
+    def __len__(self):
+        return (self.num_stored - 1) // self.batch_size + 1
+
+    def __getitem__(self, item):
+        return self.transitions[item]
+
+
+class BootstrapIterator(TransitionIterator):
+    """A transition iterator that can be used to train ensemble of bootstrapped models.
+
+    When iterating, this iterator samples from a different set of indices for each model in the
+    ensemble, essentially assigning a different dataset to each model. Each batch is of
+    shape (ensemble_size x batch_size x obs_size) -- likewise for actions, rewards, dones.
+
+    Args:
+        transitions (:class:`TransitionBatch`): the transition data used to built
+            the iterator.
+        batch_size (int): the batch size to use when iterating over the stored data.
+        ensemble_size (int): the number of models in the ensemble.
+        shuffle_each_epoch (bool): if ``True`` the iteration order is shuffled everytime a
+            loop over the data is completed. Defaults to ``False``.
+        permute_indices (boot): if ``True`` the bootstrap datasets are just
+            permutations of the original data. If ``False`` they are sampled with
+            replacement. Defaults to ``True``.
+        rng (np.random.Generator, optional): a random number generator when sampling
+            batches. If None (default value), a new default generator will be used.
+
+    Note:
+        If you want to make other custom types of iterators compatible with ensembles
+        of bootstrapped models, the easiest way is to subclass :class:`BootstrapIterator`
+        and overwrite ``__getitem()__`` method. The sampling methods of this class
+        will then batch the result of of ``self[item]`` along a model dimension, where each
+        batch is sampled independently.
+    """
+
+    def __init__(
+        self,
+        transitions,
+        batch_size: int,
+        ensemble_size: int,
+        shuffle_each_epoch: bool = False,
+        permute_indices: bool = True,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(
+            transitions, batch_size, shuffle_each_epoch=shuffle_each_epoch, rng=rng
+        )
+        self._ensemble_size = ensemble_size
+        self._permute_indices = permute_indices
+        self._bootstrap_iter = ensemble_size > 1
+        self.member_indices = self._sample_member_indices()
+
+    def _sample_member_indices(self) -> np.ndarray:
+        member_indices = np.empty((self.ensemble_size, self.num_stored), dtype=int)
+        if self._permute_indices:
+            for i in range(self.ensemble_size):
+                member_indices[i] = self._rng.permutation(self.num_stored)
+        else:
+            member_indices = self._rng.choice(
+                self.num_stored,
+                size=(self.ensemble_size, self.num_stored),
+                replace=True,
+            )
+        return member_indices
+
+    def __iter__(self):
+        super().__iter__()
+        return self
+
+    def __next__(self):
+        if not self._bootstrap_iter:
+            return super().__next__()
+        indices = self._get_indices_next_batch()
+        batches = []
+        for member_idx in self.member_indices:
+            content_indices = member_idx[indices]
+            batches.append(self[content_indices])
+        return _consolidate_batches(batches)
+
+    def toggle_bootstrap(self):
+        """Toggles whether the iterator returns a batch per model or a single batch."""
+        if self.ensemble_size > 1:
+            self._bootstrap_iter = not self._bootstrap_iter
+
+    @property
+    def ensemble_size(self):
+        return self._ensemble_size
+
+
+def get_basic_buffer_iterators(
+    replay_buffer: ReplayBuffer,
+    batch_size: int,
+    val_ratio: float,
+    ensemble_size: int = 1,
+    shuffle_each_epoch: bool = True,
+    bootstrap_permutes: bool = False,
+):
+    """Returns training/validation iterators for the data in the replay buffer.
+
+    Args:
+        replay_buffer (:class:`mbrl.util.ReplayBuffer`): the replay buffer from which
+            data will be sampled.
+        batch_size (int): the batch size for the iterators.
+        val_ratio (float): the proportion of data to use for validation. If 0., the
+            validation buffer will be set to ``None``.
+        ensemble_size (int): the size of the ensemble being trained.
+        shuffle_each_epoch (bool): if ``True``, the iterator will shuffle the
+            order each time a loop starts. Otherwise the iteration order will
+            be the same. Defaults to ``True``.
+        bootstrap_permutes (bool): if ``True``, the bootstrap iterator will create
+            the bootstrap data using permutations of the original data. Otherwise
+            it will use sampling with replacement. Defaults to ``False``.
+
+    Returns:
+        (tuple of :class:`mbrl.replay_buffer.TransitionIterator`): the training
+        and validation iterators, respectively.
+    """
+    data = replay_buffer.get_all(shuffle=True)
+    val_size = int(replay_buffer.num_stored * val_ratio)
+    train_size = replay_buffer.num_stored - val_size
+    train_data = data[:train_size]
+    train_iter = BootstrapIterator(
+        train_data,
+        batch_size,
+        ensemble_size,
+        shuffle_each_epoch=shuffle_each_epoch,
+        permute_indices=bootstrap_permutes,
+        rng=replay_buffer.rng,
+    )
+
+    val_iter = None
+    if val_size > 0:
+        val_data = data[train_size:]
+        val_iter = TransitionIterator(
+            val_data, batch_size, shuffle_each_epoch=False, rng=replay_buffer.rng
+        )
+
+    return train_iter, val_iter

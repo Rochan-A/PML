@@ -10,7 +10,214 @@ import mbrl.models as models
 from models.transitionreward import *
 from models.dynamics_model import *
 from .replay_buffer import create_replay_buffer
-from .agent import create_agent
+
+import time
+from typing import Callable, List, Optional, Sequence, cast
+
+import hydra
+import numpy as np
+import omegaconf
+import torch
+import torch.distributions
+
+import mbrl.models
+import mbrl.types
+import mbrl.util.math
+
+from mbrl.planning.core import Agent
+from mbrl.planning.trajectory_opt import Optimizer, TrajectoryOptimizer
+from .replay_buffer import get_basic_buffer_iterators, create_replay_buffer
+
+class RollingHistoryContext:
+    def __init__(self, K, state_sz, action_sz) -> None:
+        self.K = K
+        
+        self.state_sz = state_sz
+        self.action_sz = action_sz
+        self.default_sz = (state_sz+action_sz)*K
+        self.store = None
+        self.prev_st = None
+
+    def append(self, state, action=None):
+        if self.prev_st is None:
+            self.prev_st = state
+        else:
+            state = state - self.prev_st
+
+        if action is None:
+            action = np.random.rand(self.action_sz)
+
+        k = np.concatenate([state, action], axis=0)
+        if self.store is None:
+            self.store = np.repeat(k, self.K)
+        else:
+            self.store = np.roll(self.store, -k.shape[0])
+            self.store[-k.shape[0]:] = k
+
+    def reset(self):
+        self.store = None
+        self.prev_st = None
+
+
+class TrajectoryOptimizerAgent(Agent):
+    """Agent that performs trajectory optimization on a given objective function for each action.
+
+    This class uses an internal :class:`TrajectoryOptimizer` object to generate
+    sequence of actions, given a user-defined trajectory optimization function.
+
+    Args:
+        optimizer_cfg (omegaconf.DictConfig): the configuration of the base optimizer to pass to
+            the trajectory optimizer.
+        action_lb (sequence of floats): the lower bound of the action space.
+        action_ub (sequence of floats): the upper bound of the action space.
+        planning_horizon (int): the length of action sequences to evaluate. Defaults to 1.
+        replan_freq (int): the frequency of re-planning. The agent will keep a cache of the
+            generated sequences an use it for ``replan_freq`` number of :meth:`act` calls.
+            Defaults to 1.
+        verbose (bool): if ``True``, prints the planning time on the console.
+        keep_last_solution (bool): if ``True``, the last solution found by a call to
+            :meth:`optimize` is kept as the initial solution for the next step. This solution is
+            shifted ``replan_freq`` time steps, and the new entries are filled using the initial
+            solution. Defaults to ``True``.
+
+    Note:
+        After constructing an agent of this type, the user must call
+        :meth:`set_trajectory_eval_fn`. This is not passed to the constructor so that the agent can
+        be automatically instantiated with Hydra (which in turn makes it easy to replace this
+        agent with an agent of another type via config-only changes).
+    """
+
+    def __init__(
+        self,
+        optimizer_cfg: omegaconf.DictConfig,
+        action_lb: Sequence[float],
+        action_ub: Sequence[float],
+        planning_horizon: int = 1,
+        replan_freq: int = 1,
+        verbose: bool = False,
+        keep_last_solution: bool = True,
+    ):
+        self.optimizer = TrajectoryOptimizer(
+            optimizer_cfg,
+            np.array(action_lb),
+            np.array(action_ub),
+            planning_horizon=planning_horizon,
+            replan_freq=replan_freq,
+            keep_last_solution=keep_last_solution,
+        )
+        self.optimizer_args = {
+            "optimizer_cfg": optimizer_cfg,
+            "action_lb": np.array(action_lb),
+            "action_ub": np.array(action_ub),
+        }
+        self.trajectory_eval_fn: mbrl.types.TrajectoryEvalFnType = None
+        self.actions_to_use: List[np.ndarray] = []
+        self.replan_freq = replan_freq
+        self.verbose = verbose
+
+    def set_trajectory_eval_fn(
+        self, trajectory_eval_fn: mbrl.types.TrajectoryEvalFnType
+    ):
+        """Sets the trajectory evaluation function.
+
+        Args:
+            trajectory_eval_fn (callable): a trajectory evaluation function, as described in
+                :class:`TrajectoryOptimizer`.
+        """
+        self.trajectory_eval_fn = trajectory_eval_fn
+
+    def reset(self, planning_horizon: Optional[int] = None):
+        """Resets the underlying trajectory optimizer."""
+        if planning_horizon:
+            self.optimizer = TrajectoryOptimizer(
+                cast(omegaconf.DictConfig, self.optimizer_args["optimizer_cfg"]),
+                cast(np.ndarray, self.optimizer_args["action_lb"]),
+                cast(np.ndarray, self.optimizer_args["action_ub"]),
+                planning_horizon=planning_horizon,
+                replan_freq=self.replan_freq,
+            )
+
+        self.optimizer.reset()
+
+    def act(
+        self, obs: np.ndarray, context=None, optimizer_callback: Optional[Callable] = None, **_kwargs
+    ) -> np.ndarray:
+        """Issues an action given an observation.
+
+        This method optimizes a full sequence of length ``self.planning_horizon`` and returns
+        the first action in the sequence. If ``self.replan_freq > 1``, future calls will use
+        subsequent actions in the sequence, for ``self.replan_freq`` number of steps.
+        After that, the method will plan again, and repeat this process.
+
+        Args:
+            obs (np.ndarray): the observation for which the action is needed.
+            optimizer_callback (callable, optional): a callback function
+                to pass to the optimizer.
+            context (np.ndarray, Optional): the observation for which the action is needed.
+
+        Returns:
+            (np.ndarray): the action.
+        """
+        if self.trajectory_eval_fn is None:
+            raise RuntimeError(
+                "Please call `set_trajectory_eval_fn()` before using TrajectoryOptimizerAgent"
+            )
+        plan_time = 0.0
+        if not self.actions_to_use:  # re-plan is necessary
+
+            def trajectory_eval_fn(action_sequences):
+                return self.trajectory_eval_fn(obs, action_sequences, context)
+
+            start_time = time.time()
+            plan = self.optimizer.optimize(
+                trajectory_eval_fn, callback=optimizer_callback
+            )
+            plan_time = time.time() - start_time
+
+            self.actions_to_use.extend([a for a in plan[: self.replan_freq]])
+        action = self.actions_to_use.pop(0)
+
+        if self.verbose:
+            print(f"Planning time: {plan_time:.3f}")
+        return action
+
+    def plan(self, obs: np.ndarray, context=None, **_kwargs) -> np.ndarray:
+        """Issues a sequence of actions given an observation.
+
+        Returns s sequence of length self.planning_horizon.
+
+        Args:
+            obs (np.ndarray): the observation for which the sequence is needed.
+
+        Returns:
+            (np.ndarray): a sequence of actions.
+        """
+        if self.trajectory_eval_fn is None:
+            raise RuntimeError(
+                "Please call `set_trajectory_eval_fn()` before using TrajectoryOptimizerAgent"
+            )
+
+        def trajectory_eval_fn(action_sequences):
+            return self.trajectory_eval_fn(obs, action_sequences, context)
+
+        plan = self.optimizer.optimize(trajectory_eval_fn)
+        return plan
+
+
+def create_agent(agent_cfg, model_env, config):
+    mbrl.planning.complete_agent_cfg(model_env, agent_cfg)
+    agent = hydra.utils.instantiate(agent_cfg)
+
+    def trajectory_eval_fn(initial_state, action_sequences, initial_context=None):
+        return model_env.evaluate_action_sequences(
+            action_sequences,
+            initial_state=initial_state,
+            num_particles=config.agent.max_particles,
+            initial_context=initial_context
+        )
+
+    agent.set_trajectory_eval_fn(trajectory_eval_fn)
+    return agent
 
 
 def rollout_agent_trajectories(
@@ -18,6 +225,7 @@ def rollout_agent_trajectories(
     steps_or_trials_to_collect: int,
     agent: mbrl.planning.Agent,
     agent_kwargs: Dict,
+    context_len=None,
     trial_length: Optional[int] = None,
     replay_buffer = None,
     collect_full_trajectories: bool = False,
@@ -61,17 +269,30 @@ def rollout_agent_trajectories(
     step = 0
     trial = 0
     total_rewards: List[float] = []
+    if context_len:
+        rhc = RollingHistoryContext(context_len, env.observation_space.shape[0], env.action_space.shape[0])
     while True:
         obs = env.reset()
+        if context_len:
+            rhc.reset()
+            rhc.append(obs, None)
         agent.reset()
         done = False
         total_reward = 0.0
         while not done:
-            action = agent.act(obs, **agent_kwargs)
+            if context_len:
+                action = agent.act(obs, rhc.store, **agent_kwargs)
+                rhc.append(obs, action)
+            else:
+                action = agent.act(obs, **agent_kwargs)
+
             next_obs, reward, done, info = env.step(action)
 
             if replay_buffer is not None:
-                replay_buffer.add(obs, action, next_obs, reward, done)
+                if context_len:
+                    replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
+                else:
+                    replay_buffer.add(obs, action, next_obs, reward, done)
 
             obs = next_obs
             total_reward += reward
@@ -93,7 +314,6 @@ def rollout_agent_trajectories(
     return total_rewards
 
 
-
 class Trainer(object):
     def __init__(
         self,
@@ -110,6 +330,7 @@ class Trainer(object):
         self.trial_length = config.trail_length
         self.num_trials = config.num_trials
         self.ensemble_size = config.head.ensemble_size
+        self.context_len = None if config.context.no_context else config.context.history_size
 
         generator = torch.Generator(device=config["device"])
         generator.manual_seed(args.seed)
@@ -126,8 +347,7 @@ class Trainer(object):
                     "num_layers": config.head.hidden_layers,
                     "ensemble_size": self.ensemble_size,
                     "hid_size": config.head.hidden_dim,
-                    "in_size": env.observation_space.shape[0]
-                    + env.action_space.shape[0],
+                    "in_size": config.context.out_dim + config.backbone.out_dim,
                     "out_size": "???",
                     "deterministic": False,
                     "propagation_method": "fixed_model",
@@ -164,7 +384,7 @@ class Trainer(object):
 
         # Create a dynamics model for this environment
         self.dynamics_model = create_model(
-            self.cfg, self.context_cfg, self.backbone_cfg
+            self.cfg, self.context_cfg, self.backbone_cfg, False if self.context_len is None else True
         )
 
         # Create custom gym-like environment to encapsulate the model TODO:
@@ -177,6 +397,7 @@ class Trainer(object):
             self.cfg,
             env.observation_space.shape,
             env.action_space.shape,
+            context_len=self.context_len,
             rng=np.random.default_rng(args.seed),
         )
 
@@ -185,16 +406,18 @@ class Trainer(object):
             env,
             self.trial_length,  # initial exploration steps
             mbrl.planning.RandomAgent(env),
-            {},  # keyword arguments to pass to agent.act()
+            {},  # keyword arguments to pass to agent.act(),
+            self.context_len,
             replay_buffer=self.replay_buffer,
             trial_length=self.trial_length,
+            collect_full_trajectories=True,
         )
         print("# samples stored", self.replay_buffer.num_stored)
 
         agent_cfg = omegaconf.OmegaConf.create(
             {
                 # this class evaluates many trajectories and picks the best one
-                "_target_": "TrajectoryOptimizerAgent",
+                "_target_": "trainers.TrajectoryOptimizerAgent",
                 "planning_horizon": config.agent.horizon,
                 "replan_freq": config.agent.replan_freq,
                 "verbose": False,
@@ -223,6 +446,7 @@ class Trainer(object):
             self.dynamics_model, optim_lr=config.dynamics.learning_rate, weight_decay=5e-5
         )
 
+
     def run(self, env):
         train_losses = []
         val_scores = []
@@ -233,10 +457,17 @@ class Trainer(object):
                 val_score.mean().item()
             )  # this returns val score per ensemble model
 
+        if self.context_len:
+            rhc = RollingHistoryContext(self.context_len, env.observation_space.shape[0], env.action_space.shape[0])
+
         # Main PETS loop
         all_rewards = [0]
         for trial in range(self.num_trials):
             obs = env.reset()
+            if self.context_len:
+                rhc.reset()
+                rhc.append(obs, None)
+
             self.agent.reset()
 
             done = False
@@ -250,7 +481,7 @@ class Trainer(object):
                         self.replay_buffer.get_all()
                     )  # update normalizer stats
 
-                    dataset_train, dataset_val = common_util.get_basic_buffer_iterators(
+                    dataset_train, dataset_val = get_basic_buffer_iterators(
                         self.replay_buffer,
                         batch_size=self.cfg.overrides.model_batch_size,
                         val_ratio=self.cfg.overrides.validation_ratio,
@@ -271,9 +502,18 @@ class Trainer(object):
                 # next_obs, reward, done, _ = common_util.step_env_and_add_to_buffer(
                 #     env, obs, agent, {}, replay_buffer)
 
-                action = self.agent.act(obs, **{})
+                if self.context_len:
+                    action = self.agent.act(obs, rhc.store, **{})
+                    rhc.append(obs, action)
+                else:
+                    action = self.agent.act(obs, **{})
+
                 next_obs, reward, done, _ = env.step(action)
-                self.replay_buffer.add(obs, action, next_obs, reward, done)
+
+                if self.context_len:
+                    self.replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
+                else:
+                    self.replay_buffer.add(obs, action, next_obs, reward, done)
 
                 obs = next_obs
                 total_reward += reward

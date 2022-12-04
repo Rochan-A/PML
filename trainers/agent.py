@@ -12,21 +12,120 @@ import mbrl.types
 import mbrl.util.math
 
 from mbrl.planning.core import Agent
-from mbrl.planning import TrajectoryOptimizer
+from mbrl.planning.trajectory_opt import Optimizer
 
 
-def create_agent(agent_cfg, model_env, config):
-    mbrl.planning.complete_agent_cfg(model_env, agent_cfg)
-    agent = hydra.utils.instantiate(agent_cfg)
+class CEMOptimizer(Optimizer):
+    """Implements the Cross-Entropy Method optimization algorithm.
 
-    def trajectory_eval_fn(initial_state, action_sequences):
-        return model_env.evaluate_action_sequences(
-            action_sequences, initial_state=initial_state, num_particles=config.agent.max_particles
+    A good description of CEM [1] can be found at https://arxiv.org/pdf/2008.06389.pdf. This
+    code implements the version described in Section 2.1, labeled CEM_PETS
+    (but note that the shift-initialization between planning time steps is handled outside of
+    this class by TrajectoryOptimizer).
+
+    This implementation also returns the best solution found as opposed
+    to the mean of the last generation.
+
+    Args:
+        num_iterations (int): the number of iterations (generations) to perform.
+        elite_ratio (float): the proportion of the population that will be kept as
+            elite (rounds up).
+        population_size (int): the size of the population.
+        lower_bound (sequence of floats): the lower bound for the optimization variables.
+        upper_bound (sequence of floats): the upper bound for the optimization variables.
+        alpha (float): momentum term.
+        device (torch.device): device where computations will be performed.
+        return_mean_elites (bool): if ``True`` returns the mean of the elites of the last
+            iteration. Otherwise, it returns the max solution found over all iterations.
+
+    [1] R. Rubinstein and W. Davidson. "The cross-entropy method for combinatorial and continuous
+    optimization". Methodology and Computing in Applied Probability, 1999.
+    """
+
+    def __init__(
+        self,
+        num_iterations: int,
+        elite_ratio: float,
+        population_size: int,
+        lower_bound: Sequence[Sequence[float]],
+        upper_bound: Sequence[Sequence[float]],
+        alpha: float,
+        device: torch.device,
+        return_mean_elites: bool = False,
+    ):
+        super().__init__()
+        self.num_iterations = num_iterations
+        self.elite_ratio = elite_ratio
+        self.population_size = population_size
+        self.elite_num = np.ceil(self.population_size * self.elite_ratio).astype(
+            np.int32
         )
+        self.lower_bound = torch.tensor(lower_bound, device=device, dtype=torch.float32)
+        self.upper_bound = torch.tensor(upper_bound, device=device, dtype=torch.float32)
+        self.initial_var = ((self.upper_bound - self.lower_bound) ** 2) / 16
+        self.alpha = alpha
+        self.return_mean_elites = return_mean_elites
+        self.device = device
 
-    agent.set_trajectory_eval_fn(trajectory_eval_fn)
+    def optimize(
+        self,
+        obj_fun: Callable[[torch.Tensor], torch.Tensor],
+        x0: Optional[torch.Tensor] = None,
+        callback: Optional[Callable[[torch.Tensor, torch.Tensor, int], None]] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Runs the optimization using CEM.
 
-    return agent
+        Args:
+            obj_fun (callable(tensor) -> tensor): objective function to maximize.
+            x0 (tensor, optional): initial mean for the population. Must
+                be consistent with lower/upper bounds.
+            callback (callable(tensor, tensor, int) -> any, optional): if given, this
+                function will be called after every iteration, passing it as input the full
+                population tensor, its corresponding objective function values, and
+                the index of the current iteration. This can be used for logging and plotting
+                purposes.
+
+        Returns:
+            (torch.Tensor): the best solution found.
+        """
+        mu = x0.clone()
+        var = self.initial_var.clone()
+
+        best_solution = torch.empty_like(mu)
+        best_value = -np.inf
+        population = torch.zeros((self.population_size,) + x0.shape).to(
+            device=self.device
+        )
+        for i in range(self.num_iterations):
+            lb_dist = mu - self.lower_bound
+            ub_dist = self.upper_bound - mu
+            mv = torch.min(torch.square(lb_dist / 2), torch.square(ub_dist / 2))
+            constrained_var = torch.min(mv, var)
+
+            population = mbrl.util.math.truncated_normal_(population)
+            population = population * torch.sqrt(constrained_var) + mu
+
+            values = obj_fun(population)
+
+            if callback is not None:
+                callback(population, values, i)
+
+            # filter out NaN values
+            values[values.isnan()] = -1e-10
+            best_values, elite_idx = values.topk(self.elite_num)
+            elite = population[elite_idx]
+
+            new_mu = torch.mean(elite, dim=0)
+            new_var = torch.var(elite, unbiased=False, dim=0)
+            mu = self.alpha * mu + (1 - self.alpha) * new_mu
+            var = self.alpha * var + (1 - self.alpha) * new_var
+
+            if best_values[0] > best_value:
+                best_value = best_values[0]
+                best_solution = population[elite_idx[0]].clone()
+
+        return mu if self.return_mean_elites else best_solution
 
 
 class TrajectoryOptimizer:
@@ -195,7 +294,7 @@ class TrajectoryOptimizerAgent(Agent):
         self.optimizer.reset()
 
     def act(
-        self, obs: np.ndarray, optimizer_callback: Optional[Callable] = None, **_kwargs
+        self, obs: np.ndarray, context=None, optimizer_callback: Optional[Callable] = None, **_kwargs
     ) -> np.ndarray:
         """Issues an action given an observation.
 
@@ -208,6 +307,7 @@ class TrajectoryOptimizerAgent(Agent):
             obs (np.ndarray): the observation for which the action is needed.
             optimizer_callback (callable, optional): a callback function
                 to pass to the optimizer.
+            context (np.ndarray, Optional): the observation for which the action is needed.
 
         Returns:
             (np.ndarray): the action.
@@ -219,8 +319,9 @@ class TrajectoryOptimizerAgent(Agent):
         plan_time = 0.0
         if not self.actions_to_use:  # re-plan is necessary
 
+            print('In act: ', context.shape)
             def trajectory_eval_fn(action_sequences):
-                return self.trajectory_eval_fn(obs, action_sequences)
+                return self.trajectory_eval_fn(obs, action_sequences, context)
 
             start_time = time.time()
             plan = self.optimizer.optimize(
@@ -235,7 +336,7 @@ class TrajectoryOptimizerAgent(Agent):
             print(f"Planning time: {plan_time:.3f}")
         return action
 
-    def plan(self, obs: np.ndarray, **_kwargs) -> np.ndarray:
+    def plan(self, obs: np.ndarray, context=None, **_kwargs) -> np.ndarray:
         """Issues a sequence of actions given an observation.
 
         Returns s sequence of length self.planning_horizon.
@@ -252,7 +353,7 @@ class TrajectoryOptimizerAgent(Agent):
             )
 
         def trajectory_eval_fn(action_sequences):
-            return self.trajectory_eval_fn(obs, action_sequences)
+            return self.trajectory_eval_fn(obs, action_sequences, context)
 
         plan = self.optimizer.optimize(trajectory_eval_fn)
         return plan

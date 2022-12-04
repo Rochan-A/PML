@@ -42,7 +42,7 @@ class Backbone(nn.Module):
 
 class ContextEncoder(nn.Module):
     def __init__(
-        self, state_sz, action_sz, history_size=16, hidden_dim=256, hidden_layers=1, out_dim=256, actv=nn.LeakyReLU, deterministic=True
+        self, state_sz, action_sz, history_size=16, hidden_dim=256, hidden_layers=1, out_dim=256, actv=nn.LeakyReLU, deterministic=True, no_context=False
         ):
         super(ContextEncoder, self).__init__()
 
@@ -66,10 +66,9 @@ class ContextEncoder(nn.Module):
                        mu,
                        log_var):
         """
-        Gumbel-softmax trick to sample from Categorical Distribution
         :param mu: (Tensor) mean of the latent Gaussian  [B x D]
         :param log_var: (Tensor) Log variance of the latent Gaussian [B x D]
-        :return: (Tensor) [B x (D + Q)]
+        :return: (Tensor) [B x D]
         """
 
         std = torch.exp(0.5 * log_var)

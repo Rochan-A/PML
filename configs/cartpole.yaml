@@ -29,20 +29,21 @@ agent:
 
 # Model arch parameters
 context:
-  hidden_dim: 256
+  hidden_dim: 128
   hidden_layers: 1
-  out_dim: 128
-  history_size: 16
+  out_dim: 64
+  history_size: 8
+  no_context: False
 
 backbone:
-  hidden_dim: 256
+  hidden_dim: 128
   hidden_layers: 1
-  out_dim: 128
+  out_dim: 64
 
 head:
   load_model: False
   model_path: "./saves/head.ckpt"
-  hidden_dim: 256
+  hidden_dim: 128
   hidden_layers: 1
   ensemble_size: 5
 
