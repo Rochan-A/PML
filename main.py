@@ -1,4 +1,4 @@
-import yaml
+import yaml, math
 from easydict import EasyDict
 from pathlib import Path
 from os.path import join
@@ -12,6 +12,11 @@ from tensorboardX import SummaryWriter
 from trainers import Trainer
 from envs import ContexualEnv
 
+import mbrl.env.cartpole_continuous as cartpole_env
+import mbrl.env.reward_fns as reward_fns
+import mbrl.env.termination_fns as termination_fns
+
+from envs.term_rew import *
 
 def make_dirs(directory):
     """Make dir path if it does not exist
@@ -36,19 +41,13 @@ def gen_save_path(args, config):
         path (str)
     """
 
-    PATH = join(args.root, "{}".format(args.env))
+    PATH = join(args.root, "{}".format(config.env))
 
     if config.normalize_flag:
         PATH = join(PATH, "norm")
     else:
         PATH = join(PATH, "raw")
 
-    if config.MPC.optimizer in ["random", "CEM"]:
-        PATH = join(PATH, "{}".format(config.MPC.optimizer))
-        # TODO: add optimizer params to path
-        # PATH = join(PATH, "hor_{}".format(config.MPC.))
-    else:
-        raise ValueError(args.policy_type)
 
     # TODO: add params to path
     PATH = join(PATH, "seed_" + str(args.seed))
@@ -74,29 +73,60 @@ def main(args, config, PATH):
     env_fam = ContexualEnv(config)
     env, _ = env_fam.reset()
 
+    if args.mdp:
+        import gym
+        env = cartpole_env.CartPoleEnv()
+        env.seed(args.seed)
+        # This functions allows the model to evaluate the true rewards given an observation 
+        reward_fn = reward_fns.cartpole
+        # This function allows the model to know if an observation should make the episode end
+        term_fn = termination_fns.cartpole
+    else:
+        term_fn = cartpole_upright_term
+        reward_fn = cartpole_upright_reward
+
     writer = SummaryWriter(PATH)
 
     # Initialize Trainer
     algo = Trainer(
         env=env,
         config=config,
+        reward_fn=reward_fn,
+        term_fn=term_fn,
+        args=args,
         writer=writer,
         no_test_flag=args.no_test_flag,
         only_test_flag=args.only_test_flag
     )
 
-    train_losses, val_scores = algo.run(env)
-    
-    algo.plot(train_losses, val_scores, 'plot.png')
+    if args.mdp:
+        train_losses, val_scores, all_rewards = algo.run(env)
+    else:
+        train_losses, val_scores, all_rewards = algo.run(env_fam)
+
+    algo.plot(
+        [train_losses, val_scores],
+        join(args.root, 'plot.png'),
+        ["Epoch", "Epoch"],
+        ["Training loss (avg. NLL)", "Validation score (avg. MSE)"]
+    )
+    algo.plot_single(
+        all_rewards,
+        join(args.root,'rewards.png'),
+        xlabel="Trial",
+        ylabel="Reward"
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="")
+    parser = argparse.ArgumentParser(description="Code to test Generalization in Contextual MDPs for MBRL")
     parser.add_argument("--config", help="config file")
     parser.add_argument("--root", default="./saves/", help="experiments name")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")
     parser.add_argument("--cuda", type=int, default=0, help="CUDA device idx")
-    parser.add_argument("--env", default="SunblazeCartPole-v0", help="environment name")
+    parser.add_argument(
+        "--mdp", action="store_true", help="flag to enable only MDP training"
+    )
     parser.add_argument(
         "--no_test_flag", action="store_true", help="flag to disable test"
     )
@@ -113,6 +143,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(str(args.config))
 
+    # generate save path
     PATH = gen_save_path(args, config)
     make_dirs(PATH)
 

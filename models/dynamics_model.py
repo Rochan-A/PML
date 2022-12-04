@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import torch.nn as nn
 
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 #
@@ -15,7 +14,7 @@ import torch
 import mbrl.types
 
 
-class ContextVector:
+class RollingHistoryContext:
     def __init__(self, K, state_sz, action_sz) -> None:
         self.K = K
         
@@ -215,6 +214,7 @@ class ModelEnv:
 
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)
+
 
 
 if __name__=='__main__':

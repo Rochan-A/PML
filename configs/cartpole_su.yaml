@@ -14,85 +14,43 @@ test_range:                       # model contexts for testing
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
 normalize_flag: False             # normalize state
+trail_length: 200                 # Inital traj count
+num_trials: 10                    # Number of episodes
 
-# MPC controller configuration
-MPC:
-  optimizer: "CEM"                # random or CEM, # random may need to fix bugs
-  random:                         # TODO: warning may contain not finished modification
-    horizon: 15                   # how long of the horizon to predict
-    popsize: 40000                # how many random samples for mpc
-    gamma: 0.99                   # reward discount coefficient
-    max_iters: 20
-    num_elites: 50
-    epsilon: 0.2
-    alpha: 0.01
-    init_mean: 0
-    init_var: 10
-    particle: 1
-  CEM:
-    horizon: 15                   # how long of the horizon to predict
-    popsize: 1000                 # how many random samples for mpc
-    particle: 1                   # number of particles to enlarge
-    gamma: 1                      # reward discount coefficient
-    max_iters: 5
-    num_elites: 20
-    epsilon: 0.001
-    alpha: 0.1
-    init_mean: 0
-    init_var: 1
+# Agent configuration
+agent:
+  horizon: 15                   # how long of the horizon to predict
+  popsize: 500                  # how many random samples for mpc
+  alpha: 0.01
+  replan_freq: 1
+  num_iters: 20
+  elite_ratio: 0.1
+  max_particles: 20
 
 # Model arch parameters
 context:
-  load_model: False
-  model_path: "./saves/context.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
+  hidden_dim: 256
+  hidden_layers: 1
   out_dim: 128
-  history_sz: 16
+  history_size: 16
+
+backbone:
+  hidden_dim: 256
+  hidden_layers: 1
+  out_dim: 128
 
 head:
   load_model: False
   model_path: "./saves/head.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
+  hidden_dim: 256
+  hidden_layers: 1
   ensemble_size: 5
-
-backbone:
-  load_model: False
-  model_path: "./saves/backbone.ckpt"
-  hidden_sizes: 256
-  hidden_nonlinearity: relu
-  ensemble_size: 5
-  out_dim: 128
 
 # Dynamics model training config
 dynamics:
-  load_model: False
-  n_epochs: 600
-  learning_rate: 0.0005
+  learning_rate: 0.003
   batch_size: 512
-  save_model_flag: False
-  save_model_path: "./saves/dynamics.ckpt"
-  validation_flag: True
-  validation_freq: 50           # the frequency of validation
-  validation_ratio: 0.2         # ratio of validation set
-
-reward:
-  model:
-    load_model: False
-    model_path: "./saves/reward.ckpt"
-    hidden_sizes: 256
-    hidden_nonlinearity: relu
-  training_config:
-    n_epochs: 600                 # how many epoches to train the dynamic model
-    learning_rate: 0.0005         # learning rate
-    batch_size: 512
-    save_model_flag: True
-    save_model_path: "./saves/reward.ckpt"
-    validation_flag: True
-    validation_freq: 50           # the frequency of validation
-    validation_ratio: 0.2         # ratio of validation set
-
+  validation_ratio: 0.05         # ratio of validation set
 
 # "Trajectory-wise Multiple Choice Learning for Dynamics Generalization
 # in Reinforcement Learning" parameters

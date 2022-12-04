@@ -52,6 +52,7 @@ class TransitionRewardModel(Model):
         model: Model,
         context_cfg: dict,
         backbone_cfg: dict,
+        use_context = False,
         target_is_delta: bool = True,
         normalize: bool = False,
         normalize_double_precision: bool = False,
@@ -60,14 +61,21 @@ class TransitionRewardModel(Model):
     ):
         super().__init__(model.device)
 
+        self.use_context = use_context
         self.model = model
         self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
         self.backbone_enc = Backbone(**backbone_cfg).to(self.model.device)
 
         self.input_normalizer: Optional[mbrl.util.math.Normalizer] = None
         if normalize:
+
+            if use_context:
+                in_size = self.backbone_enc.in_dim + self.context_enc.in_dim
+            else:
+                in_size = self.model.in_size
+
             self.input_normalizer = mbrl.util.math.Normalizer(
-                self.model.in_size,
+                in_size,
                 self.model.device,
                 dtype=torch.double if normalize_double_precision else torch.float,
             )
@@ -82,11 +90,16 @@ class TransitionRewardModel(Model):
     def _get_model_input(
         self,
         obs,
-        action
+        action,
+        context=None
     ) -> torch.Tensor:
         obs = model_util.to_tensor(obs).to(self.device)
         action = model_util.to_tensor(action).to(self.device)
-        model_in = torch.cat([obs, action], dim=obs.ndim - 1)
+        d = [obs, action]
+        if context:
+            context = model_util.to_tensor(context).to(self.device)
+            d = [context,] + d
+        model_in = torch.cat(d, dim=obs.ndim - 1)
         if self.input_normalizer:
             # Normalizer lives on device
             model_in = self.input_normalizer.normalize(model_in).float().to(self.device)
@@ -95,14 +108,19 @@ class TransitionRewardModel(Model):
     def _process_batch(
         self, batch: mbrl.types.TransitionBatch, _as_float: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        obs, action, next_obs, reward, _ = batch.astuple()
+        bb = batch.astuple()
+        if len(bb) == 5:
+            obs, action, next_obs, reward, _ = bb
+            context = None
+        else:
+            context, obs, action, next_obs, reward, _ = bb
         if self.target_is_delta:
             target_obs = next_obs - obs
         else:
             target_obs = next_obs
         target_obs = model_util.to_tensor(target_obs).to(self.device)
 
-        model_in = self._get_model_input(obs, action)
+        model_in = self._get_model_input(obs, action, context)
         if self.learned_rewards:
             reward = model_util.to_tensor(reward).to(self.device).unsqueeze(reward.ndim)
             target = torch.cat([target_obs, reward], dim=obs.ndim - 1)
@@ -110,6 +128,7 @@ class TransitionRewardModel(Model):
             target = target_obs
         return model_in.float(), target.float()
 
+    # I think we can ignore this for now, not used anywhere I know
     def forward(self, x: torch.Tensor, *args, **kwargs) -> Tuple[torch.Tensor, ...]:
         """Calls forward method of base model with the given input and args."""
         return self.model.forward(x, *args, **kwargs)
@@ -153,7 +172,17 @@ class TransitionRewardModel(Model):
         """
         assert target is None
         model_in, target = self._process_batch(batch)
-        return self.model.loss(model_in, target=target)
+        # VERY IMPORTANT
+        # split model_in -> [context, state, action]
+        loss = 0
+        if self.use_context:
+            context, sa_t = model_in[:self.context_enc.in_dim, :], model_in[self.context_enc.in_dim:, :]
+            c_embb = self.context_enc.forward(context)
+            # loss += TODO: loss for context_enc
+            b_embb = self.backbone_enc.forward(sa_t)
+            model_in = torch.cat([c_embb, b_embb], dim=0)
+        loss += self.model.loss(model_in, target=target)
+        return loss
 
     def update(
         self,
@@ -172,6 +201,9 @@ class TransitionRewardModel(Model):
         """
         assert target is None
         model_in, target = self._process_batch(batch)
+        if self.use_context:
+            # TODO:
+            a = 0
         return self.model.update(model_in, optimizer, target=target)
 
     def eval_score(
@@ -193,6 +225,9 @@ class TransitionRewardModel(Model):
         assert target is None
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
+            if self.use_context:
+                # TODO:
+                a = 0
             return self.model.eval_score(model_in, target=target)
 
     def get_output_and_targets(
@@ -212,6 +247,9 @@ class TransitionRewardModel(Model):
         """
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
+            if self.use_context:
+                # TODO:
+                a = 0
             output = self.model.forward(model_in)
         return output, target
 
@@ -243,6 +281,9 @@ class TransitionRewardModel(Model):
             (tuple of two tensors): predicted next_observation (o_{t+1}) and rewards (r_{t+1}).
         """
         obs = model_util.to_tensor(model_state["obs"]).to(self.device)
+        if self.use_context:
+            # TODO:
+            a = 0
         model_in = self._get_model_input(model_state["obs"], act)
         if not hasattr(self.model, "sample_1d"):
             raise RuntimeError(
