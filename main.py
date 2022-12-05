@@ -10,7 +10,7 @@ import torch
 from tensorboardX import SummaryWriter
 
 from trainers import Trainer
-from envs import ContexualEnv
+from envs import ContexualEnv, DummyContextualEnv
 
 import mbrl.env.cartpole_continuous as cartpole_env
 import mbrl.env.reward_fns as reward_fns
@@ -59,9 +59,9 @@ def gen_save_path(args, config):
     return PATH
 
 
-def main(args, config, PATH):
-    """Main function
-    
+def train(args, config, PATH):
+    """train
+
     Args
     ----
         args (argparse): cmd line args
@@ -69,19 +69,21 @@ def main(args, config, PATH):
         PATH (str): save path
     """
 
-    # Contextual env
-    env_fam = ContexualEnv(config)
-    env, _ = env_fam.reset()
-
     if args.mdp:
         import gym
         env = cartpole_env.CartPoleEnv()
         env.seed(args.seed)
+        env_fam = DummyContextualEnv(env)
+
         # This functions allows the model to evaluate the true rewards given an observation 
         reward_fn = reward_fns.cartpole
         # This function allows the model to know if an observation should make the episode end
         term_fn = termination_fns.cartpole
     else:
+        # Contextual env
+        env_fam = ContexualEnv(config)
+        env, _ = env_fam.reset()
+
         term_fn = cartpole_upright_term
         reward_fn = cartpole_upright_reward
 
@@ -99,10 +101,7 @@ def main(args, config, PATH):
         only_test_flag=args.only_test_flag
     )
 
-    if args.mdp:
-        train_losses, val_scores, all_rewards = algo.run(env)
-    else:
-        train_losses, val_scores, all_rewards = algo.run(env_fam)
+    train_losses, val_scores, all_rewards = algo.run(env_fam, env)
 
     algo.plot(
         [train_losses, val_scores],
@@ -116,6 +115,37 @@ def main(args, config, PATH):
         xlabel="Trial",
         ylabel="Reward"
     )
+
+
+def test(args, config, PATH):
+    """test
+
+    Args
+    ----
+        args (argparse): cmd line args
+        config (easydict): config read from file
+        PATH (str): save path
+    """
+
+    if args.mdp:
+        import gym
+        env = cartpole_env.CartPoleEnv()
+        env.seed(args.seed)
+        env_fam = DummyContextualEnv(env)
+
+        # This functions allows the model to evaluate the true rewards given an observation 
+        reward_fn = reward_fns.cartpole
+        # This function allows the model to know if an observation should make the episode end
+        term_fn = termination_fns.cartpole
+    else:
+        # Contextual env
+        env_fam = ContexualEnv(config)
+        env, _ = env_fam.reset()
+
+        term_fn = cartpole_upright_term
+        reward_fn = cartpole_upright_reward
+
+    writer = SummaryWriter(PATH)
 
 
 if __name__ == "__main__":
@@ -147,4 +177,12 @@ if __name__ == "__main__":
     PATH = gen_save_path(args, config)
     make_dirs(PATH)
 
-    main(args, config, PATH)
+    if args.no_test_flag:
+        train(args, config, PATH)
+    elif args.only_test_flag:
+        raise NotImplementedError
+        test(args, config, PATH)
+    else:
+        train(args, config, PATH)
+        raise NotImplementedError
+        test(args, config, PATH)

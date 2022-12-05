@@ -186,7 +186,7 @@ class ModelEnv:
                 action_batch, model_state, initial_context, sample=True
             )
             rewards[terminated] = 0
-            terminated |= dones
+            terminated |= dones.reshape(-1, 1)
             total_rewards += rewards
 
         total_rewards = total_rewards.reshape(-1, num_particles)

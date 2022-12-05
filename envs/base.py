@@ -64,6 +64,19 @@ class ContexualEnv():
         return self.env(**context), context
 
 
+class DummyContextualEnv():
+    def __init__(self, env) -> None:
+        super().__init__()
+
+        self.env = env
+
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+
+    def reset(self, train=True):
+        return self.env, None
+
+
 if __name__=='__main__':
     import yaml
     from easydict import EasyDict

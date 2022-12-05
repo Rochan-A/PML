@@ -338,6 +338,7 @@ class Trainer(object):
         # Everything with "???" indicates an option with a missing value.
         # Our utility functions will fill in these details using the
         # environment information
+        in_sz = config.context.out_dim + config.backbone.out_dim if self.context_len is not None else env.observation_space.shape[0]+env.action_space.shape[0]
         cfg_dict = {
             # dynamics model configuration
             "dynamics_model": {
@@ -347,7 +348,7 @@ class Trainer(object):
                     "num_layers": config.head.hidden_layers,
                     "ensemble_size": self.ensemble_size,
                     "hid_size": config.head.hidden_dim,
-                    "in_size": config.context.out_dim + config.backbone.out_dim,
+                    "in_size": in_sz,
                     "out_size": "???",
                     "deterministic": False,
                     "propagation_method": "fixed_model",
@@ -447,7 +448,7 @@ class Trainer(object):
         )
 
 
-    def run(self, env):
+    def run(self, env_fam, env):
         train_losses = []
         val_scores = []
 
@@ -463,6 +464,12 @@ class Trainer(object):
         # Main PETS loop
         all_rewards = [0]
         for trial in range(self.num_trials):
+
+            # Sample CMDP from distribution. If --mdp flag, then it returns the
+            # same MDP.
+            env, ctx_vals = env_fam.reset(train=True)
+            print('Context vector: {}'.format(ctx_vals if ctx_vals is not None else '<fixed>'))
+
             obs = env.reset()
             if self.context_len:
                 rhc.reset()
