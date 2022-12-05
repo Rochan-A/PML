@@ -392,6 +392,8 @@ class Trainer(object):
             self.cfg, self.context_cfg, self.backbone_cfg, False if self.context_len is None else True
         )
 
+        print(list(self.dynamics_model.state_dict()))
+
         # Create custom gym-like environment to encapsulate the model TODO:
         self.model_env = ModelEnv(
             env, self.dynamics_model, term_fn, reward_fn, generator=generator

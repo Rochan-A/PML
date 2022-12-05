@@ -44,7 +44,7 @@ class ContexualEnv():
         self.c_train = ContextSampler(config.train_params[0])
         self.c_test = ContextSampler(config.test_range[0])
 
-        if config.env == 'CarpoleBalance':
+        if config.env == 'CartpoleBalance':
             self.env = CartPoleEnv_template
         elif config.env == 'CartpoleSwingUp':
             self.env = CartPoleSwingUpEnv_template

@@ -43,7 +43,7 @@ class ModelEnv:
         reward_fn: Optional[mbrl.types.RewardFnType] = None,
         generator: Optional[torch.Generator] = None,
     ):
-        self.dynamics_model = model
+        self.dynamics_model = model             # whole model containing dynamics, backbone and context_enc
         self.termination_fn = termination_fn
         self.reward_fn = reward_fn
         self.device = model.device

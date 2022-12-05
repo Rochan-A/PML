@@ -1,5 +1,5 @@
 import time
-from typing import Callable, List, Optional, Sequence, cast
+from typing import Callable, Optional, Sequence
 
 import hydra
 import numpy as np
@@ -11,7 +11,6 @@ import mbrl.models
 import mbrl.types
 import mbrl.util.math
 
-from mbrl.planning.core import Agent
 from mbrl.planning.trajectory_opt import Optimizer
 
 
@@ -211,149 +210,3 @@ class TrajectoryOptimizer:
     def reset(self):
         """Resets the previous solution cache to the initial solution."""
         self.previous_solution = self.initial_solution.clone()
-
-
-class TrajectoryOptimizerAgent(Agent):
-    """Agent that performs trajectory optimization on a given objective function for each action.
-
-    This class uses an internal :class:`TrajectoryOptimizer` object to generate
-    sequence of actions, given a user-defined trajectory optimization function.
-
-    Args:
-        optimizer_cfg (omegaconf.DictConfig): the configuration of the base optimizer to pass to
-            the trajectory optimizer.
-        action_lb (sequence of floats): the lower bound of the action space.
-        action_ub (sequence of floats): the upper bound of the action space.
-        planning_horizon (int): the length of action sequences to evaluate. Defaults to 1.
-        replan_freq (int): the frequency of re-planning. The agent will keep a cache of the
-            generated sequences an use it for ``replan_freq`` number of :meth:`act` calls.
-            Defaults to 1.
-        verbose (bool): if ``True``, prints the planning time on the console.
-        keep_last_solution (bool): if ``True``, the last solution found by a call to
-            :meth:`optimize` is kept as the initial solution for the next step. This solution is
-            shifted ``replan_freq`` time steps, and the new entries are filled using the initial
-            solution. Defaults to ``True``.
-
-    Note:
-        After constructing an agent of this type, the user must call
-        :meth:`set_trajectory_eval_fn`. This is not passed to the constructor so that the agent can
-        be automatically instantiated with Hydra (which in turn makes it easy to replace this
-        agent with an agent of another type via config-only changes).
-    """
-
-    def __init__(
-        self,
-        optimizer_cfg: omegaconf.DictConfig,
-        action_lb: Sequence[float],
-        action_ub: Sequence[float],
-        planning_horizon: int = 1,
-        replan_freq: int = 1,
-        verbose: bool = False,
-        keep_last_solution: bool = True,
-    ):
-        self.optimizer = TrajectoryOptimizer(
-            optimizer_cfg,
-            np.array(action_lb),
-            np.array(action_ub),
-            planning_horizon=planning_horizon,
-            replan_freq=replan_freq,
-            keep_last_solution=keep_last_solution,
-        )
-        self.optimizer_args = {
-            "optimizer_cfg": optimizer_cfg,
-            "action_lb": np.array(action_lb),
-            "action_ub": np.array(action_ub),
-        }
-        self.trajectory_eval_fn: mbrl.types.TrajectoryEvalFnType = None
-        self.actions_to_use: List[np.ndarray] = []
-        self.replan_freq = replan_freq
-        self.verbose = verbose
-
-    def set_trajectory_eval_fn(
-        self, trajectory_eval_fn: mbrl.types.TrajectoryEvalFnType
-    ):
-        """Sets the trajectory evaluation function.
-
-        Args:
-            trajectory_eval_fn (callable): a trajectory evaluation function, as described in
-                :class:`TrajectoryOptimizer`.
-        """
-        self.trajectory_eval_fn = trajectory_eval_fn
-
-    def reset(self, planning_horizon: Optional[int] = None):
-        """Resets the underlying trajectory optimizer."""
-        if planning_horizon:
-            self.optimizer = TrajectoryOptimizer(
-                cast(omegaconf.DictConfig, self.optimizer_args["optimizer_cfg"]),
-                cast(np.ndarray, self.optimizer_args["action_lb"]),
-                cast(np.ndarray, self.optimizer_args["action_ub"]),
-                planning_horizon=planning_horizon,
-                replan_freq=self.replan_freq,
-            )
-
-        self.optimizer.reset()
-
-    def act(
-        self, obs: np.ndarray, context=None, optimizer_callback: Optional[Callable] = None, **_kwargs
-    ) -> np.ndarray:
-        """Issues an action given an observation.
-
-        This method optimizes a full sequence of length ``self.planning_horizon`` and returns
-        the first action in the sequence. If ``self.replan_freq > 1``, future calls will use
-        subsequent actions in the sequence, for ``self.replan_freq`` number of steps.
-        After that, the method will plan again, and repeat this process.
-
-        Args:
-            obs (np.ndarray): the observation for which the action is needed.
-            optimizer_callback (callable, optional): a callback function
-                to pass to the optimizer.
-            context (np.ndarray, Optional): the observation for which the action is needed.
-
-        Returns:
-            (np.ndarray): the action.
-        """
-        if self.trajectory_eval_fn is None:
-            raise RuntimeError(
-                "Please call `set_trajectory_eval_fn()` before using TrajectoryOptimizerAgent"
-            )
-        plan_time = 0.0
-        if not self.actions_to_use:  # re-plan is necessary
-
-            print('In act: ', context.shape)
-            def trajectory_eval_fn(action_sequences):
-                return self.trajectory_eval_fn(obs, action_sequences, context)
-
-            start_time = time.time()
-            plan = self.optimizer.optimize(
-                trajectory_eval_fn, callback=optimizer_callback
-            )
-            plan_time = time.time() - start_time
-
-            self.actions_to_use.extend([a for a in plan[: self.replan_freq]])
-        action = self.actions_to_use.pop(0)
-
-        if self.verbose:
-            print(f"Planning time: {plan_time:.3f}")
-        return action
-
-    def plan(self, obs: np.ndarray, context=None, **_kwargs) -> np.ndarray:
-        """Issues a sequence of actions given an observation.
-
-        Returns s sequence of length self.planning_horizon.
-
-        Args:
-            obs (np.ndarray): the observation for which the sequence is needed.
-
-        Returns:
-            (np.ndarray): a sequence of actions.
-        """
-        if self.trajectory_eval_fn is None:
-            raise RuntimeError(
-                "Please call `set_trajectory_eval_fn()` before using TrajectoryOptimizerAgent"
-            )
-
-        def trajectory_eval_fn(action_sequences):
-            return self.trajectory_eval_fn(obs, action_sequences, context)
-
-        plan = self.optimizer.optimize(trajectory_eval_fn)
-        return plan

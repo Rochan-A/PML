@@ -1,5 +1,5 @@
 # Environment configuration
-env: CarpoleBalance          # env name
+env: CartpoleBalance              # env name
 train_params:                     # model contexts for training
 - masscart: [1., 1.3]
   masspole: [0.1, 0.3]
@@ -13,14 +13,14 @@ test_range:                       # model contexts for testing
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
-normalize_flag: True             # normalize input
+normalize_flag: True              # normalize input
 trail_length: 200                 # max len of episode
-num_trials: 40                    # Number of episodes
+num_trials: 20                    # Number of episodes
 
 # Agent configuration
 agent:
-  horizon: 15                   # how long of the horizon to predict
-  popsize: 500                  # how many random samples for mpc
+  horizon: 15                     # how long of the horizon to predict
+  popsize: 500                    # how many random samples for mpc
   alpha: 0.01
   replan_freq: 1
   num_iters: 20
@@ -32,7 +32,7 @@ context:
   hidden_dim: 128
   hidden_layers: 1
   out_dim: 64
-  history_size: 8
+  history_size: 16
   no_context: False
 
 backbone:
