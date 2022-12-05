@@ -9,7 +9,7 @@ import torch
 
 from tensorboardX import SummaryWriter
 
-from trainers import Trainer
+from trainers import Trainer, Tester
 from envs import ContexualEnv, DummyContextualEnv
 
 import mbrl.env.cartpole_continuous as cartpole_env
@@ -17,6 +17,7 @@ import mbrl.env.reward_fns as reward_fns
 import mbrl.env.termination_fns as termination_fns
 
 from envs.term_rew import *
+
 
 def make_dirs(directory):
     """Make dir path if it does not exist
@@ -118,14 +119,13 @@ def train(args, config, PATH):
     )
 
 
-def test(args, config, PATH):
+def test(args, config):
     """test
 
     Args
     ----
         args (argparse): cmd line args
         config (easydict): config read from file
-        PATH (str): save path
     """
 
     if args.mdp:
@@ -146,13 +146,31 @@ def test(args, config, PATH):
         term_fn = cartpole_upright_term
         reward_fn = cartpole_upright_reward
 
-    writer = SummaryWriter(PATH)
+    # Add stuff
+    tester = Tester(
+        env,
+        env_fam,
+        reward_fn,
+        term_fn,
+        config,
+        args
+    )
+
+    all_rewards = tester.run(env_fam, env)
+
+    tester.plot_single(
+        all_rewards,
+        join(args.root,'test-rewards.png'),
+        xlabel="Trial",
+        ylabel="Reward"
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Code to test Generalization in Contextual MDPs for MBRL")
     parser.add_argument("--config", help="config file")
     parser.add_argument("--root", default="./saves/", help="experiments name")
+    parser.add_argument("--load", help="path to load models from")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")
     parser.add_argument("--cuda", type=int, default=0, help="CUDA device idx")
     parser.add_argument(
@@ -181,9 +199,7 @@ if __name__ == "__main__":
     if args.no_test_flag:
         train(args, config, PATH)
     elif args.only_test_flag:
-        raise NotImplementedError
-        test(args, config, PATH)
+        test(args, config)
     else:
         train(args, config, PATH)
-        raise NotImplementedError
-        test(args, config, PATH)
+        test(args, config)

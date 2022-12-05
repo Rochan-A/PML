@@ -229,9 +229,6 @@ class Tester(object):
         term_fn,
         config,
         args,
-        writer,
-        no_test_flag=False,
-        only_test_flag=False,
     ):
 
         self.trial_length = config.trail_length
@@ -294,19 +291,13 @@ class Tester(object):
         self.dynamics_model = create_model(
             self.cfg, self.context_cfg, self.backbone_cfg, False if self.context_len is None else True
         )
+        
+        # load the model
+        self.dynamics_model.load(args.load)
 
         # Create custom gym-like environment to encapsulate the model TODO:
         self.model_env = ModelEnv(
             env, self.dynamics_model, term_fn, reward_fn, generator=generator
-        )
-
-        # Create custom replay buffer
-        self.replay_buffer = create_replay_buffer(
-            self.cfg,
-            env.observation_space.shape,
-            env.action_space.shape,
-            context_len=self.context_len,
-            rng=np.random.default_rng(args.seed),
         )
 
         agent_cfg = omegaconf.OmegaConf.create(
@@ -336,32 +327,18 @@ class Tester(object):
         # create agent
         self.agent = create_agent(agent_cfg, self.model_env, config)
 
-        # Create a trainer for the model
-        self.model_trainer = models.ModelTrainer(
-            self.dynamics_model, optim_lr=config.dynamics.learning_rate, weight_decay=5e-5
-        )
 
-
-    def run(self, env_fam, env, PATH):
-        train_losses = []
-        val_scores = []
-
-        def train_callback(_model, _total_calls, _epoch, tr_loss, val_score, _best_val):
-            train_losses.append(tr_loss)
-            val_scores.append(
-                val_score.mean().item()
-            )  # this returns val score per ensemble model
+    def run(self, env_fam, env):
 
         if self.context_len:
             rhc = RollingHistoryContext(self.context_len, env.observation_space.shape[0], env.action_space.shape[0])
 
-        # Main PETS loop
         all_rewards = [0]
         for trial in range(self.num_trials):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.
-            env, ctx_vals = env_fam.reset(train=True)
+            env, ctx_vals = env_fam.reset(train=False)
             print('Context vector: {}'.format(ctx_vals if ctx_vals is not None else '<fixed>'))
 
             obs = env.reset()
@@ -376,32 +353,6 @@ class Tester(object):
             steps_trial = 0
 
             while not done:
-                # --------------- Model Training -----------------
-                if steps_trial == 0:
-                    self.dynamics_model.update_normalizer(
-                        self.replay_buffer.get_all()
-                    )  # update normalizer stats
-
-                    dataset_train, dataset_val = get_basic_buffer_iterators(
-                        self.replay_buffer,
-                        batch_size=self.cfg.overrides.model_batch_size,
-                        val_ratio=self.cfg.overrides.validation_ratio,
-                        ensemble_size=self.ensemble_size,
-                        shuffle_each_epoch=True,
-                        bootstrap_permutes=False,  # build bootstrap dataset using sampling with replacement
-                    )
-
-                    self.model_trainer.train(
-                        dataset_train,
-                        dataset_val=dataset_val,
-                        num_epochs=50,
-                        patience=50,
-                        callback=train_callback,
-                    )
-
-                # --- Doing env step using the agent and adding to model dataset ---
-                # next_obs, reward, done, _ = common_util.step_env_and_add_to_buffer(
-                #     env, obs, agent, {}, replay_buffer)
 
                 if self.context_len:
                     action = self.agent.act(obs, rhc.store, **{})
@@ -411,11 +362,6 @@ class Tester(object):
 
                 next_obs, reward, done, _ = env.step(action)
 
-                if self.context_len:
-                    self.replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
-                else:
-                    self.replay_buffer.add(obs, action, next_obs, reward, done)
-
                 obs = next_obs
                 total_reward += reward
                 steps_trial += 1
@@ -424,8 +370,7 @@ class Tester(object):
                     break
             all_rewards.append(total_reward)
 
-        self.dynamics_model.save(PATH)
-        return train_losses, val_scores, all_rewards
+        return all_rewards
 
 
     def plot(self, data, path, xlabels, ylabels):

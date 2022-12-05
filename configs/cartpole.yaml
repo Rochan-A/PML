@@ -13,8 +13,8 @@ test_range:                       # model contexts for testing
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
-normalize_flag: True             # normalize state
-trail_length: 200                 # Inital traj count
+normalize_flag: True             # normalize input
+trail_length: 200                 # max len of episode
 num_trials: 40                    # Number of episodes
 
 # Agent configuration
@@ -41,8 +41,6 @@ backbone:
   out_dim: 64
 
 head:
-  load_model: False
-  model_path: "./saves/head.ckpt"
   hidden_dim: 128
   hidden_layers: 1
   ensemble_size: 5

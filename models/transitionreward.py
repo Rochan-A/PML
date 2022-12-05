@@ -394,7 +394,7 @@ class TransitionRewardModel(Model):
             self.input_normalizer.save(save_dir)
 
     def load(self, load_dir: Union[str, pathlib.Path]):
-        self.model.load(load_dir)
+        self.model.load(pathlib.Path(load_dir) / 'gaussian_mlp.pth')
         self.context_enc.load(load_dir)
         self.backbone_enc.load(load_dir)
         if self.input_normalizer:
