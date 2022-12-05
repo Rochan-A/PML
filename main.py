@@ -92,6 +92,7 @@ def train(args, config, PATH):
     # Initialize Trainer
     algo = Trainer(
         env=env,
+        env_fam=env_fam,
         config=config,
         reward_fn=reward_fn,
         term_fn=term_fn,
@@ -101,7 +102,7 @@ def train(args, config, PATH):
         only_test_flag=args.only_test_flag
     )
 
-    train_losses, val_scores, all_rewards = algo.run(env_fam, env)
+    train_losses, val_scores, all_rewards = algo.run(env_fam, env, PATH)
 
     algo.plot(
         [train_losses, val_scores],

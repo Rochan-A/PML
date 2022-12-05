@@ -220,104 +220,7 @@ def create_agent(agent_cfg, model_env, config):
     return agent
 
 
-def rollout_agent_trajectories(
-    env_fam,
-    steps_or_trials_to_collect: int,
-    agent: mbrl.planning.Agent,
-    agent_kwargs: Dict,
-    context_len=None,
-    trial_length: Optional[int] = None,
-    replay_buffer = None,
-    collect_full_trajectories: bool = False,
-) -> List[float]:
-    """Rollout agent trajectories in the given environment.
-
-    Rollouts trajectories in the environment using actions produced by the given agent.
-    Optionally, it stores the saved data into a replay buffer.
-
-    Args:
-        env (gym.Env): the environment to step.
-        steps_or_trials_to_collect (int): how many steps of the environment to collect. If
-            ``collect_trajectories=True``, it indicates the number of trials instead.
-        agent (:class:`mbrl.planning.Agent`): the agent used to generate an action.
-        agent_kwargs (dict): any keyword arguments to pass to `agent.act()` method.
-        trial_length (int, optional): a maximum length for trials (env will be reset regularly
-            after this many number of steps). Defaults to ``None``, in which case trials
-            will end when the environment returns ``done=True``.
-        replay_buffer (:class:`mbrl.util.ReplayBuffer`, optional):
-            a replay buffer to store data to use for training.
-        collect_full_trajectories (bool): if ``True``, indicates that replay buffers should
-            collect full trajectories. This only affects the split between training and
-            validation buffers. If ``collect_trajectories=True``, the split is done over
-            trials (full trials in each dataset); otherwise, it's done across steps.
-
-    Returns:
-        (list(float)): Total rewards obtained at each complete trial.
-    """
-    if (
-        replay_buffer is not None
-        and replay_buffer.stores_trajectories
-        and not collect_full_trajectories
-    ):
-        # Might be better as a warning but it's possible that users will miss it.
-        raise RuntimeError(
-            "Replay buffer is tracking trajectory information but "
-            "collect_trajectories is set to False, which will result in "
-            "corrupted trajectory data."
-        )
-
-    env, _ = env_fam.reset(train=True)
-    step = 0
-    trial = 0
-    total_rewards: List[float] = []
-    if context_len:
-        rhc = RollingHistoryContext(context_len, env.observation_space.shape[0], env.action_space.shape[0])
-    while True:
-        env, _ = env_fam.reset(train=True)
-
-        obs = env.reset()
-        if context_len:
-            rhc.reset()
-            rhc.append(obs, None)
-        agent.reset()
-        done = False
-        total_reward = 0.0
-        while not done:
-            if context_len:
-                action = agent.act(obs, rhc.store, **agent_kwargs)
-                rhc.append(obs, action)
-            else:
-                action = agent.act(obs, **agent_kwargs)
-
-            next_obs, reward, done, info = env.step(action)
-
-            if replay_buffer is not None:
-                if context_len:
-                    replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
-                else:
-                    replay_buffer.add(obs, action, next_obs, reward, done)
-
-            obs = next_obs
-            total_reward += reward
-            step += 1
-
-            if not collect_full_trajectories and step == steps_or_trials_to_collect:
-                total_rewards.append(total_reward)
-                return total_rewards
-
-            if trial_length and step % trial_length == 0:
-                if collect_full_trajectories and not done and replay_buffer is not None:
-                    replay_buffer.close_trajectory()
-                break
-        trial += 1
-        total_rewards.append(total_reward)
-        if collect_full_trajectories and trial == steps_or_trials_to_collect:
-            break
-
-    return total_rewards
-
-
-class Trainer(object):
+class Tester(object):
     def __init__(
         self,
         env,
@@ -405,19 +308,6 @@ class Trainer(object):
             context_len=self.context_len,
             rng=np.random.default_rng(args.seed),
         )
-
-        # Initialize buffer with some trajectories
-        _ = rollout_agent_trajectories(
-            env_fam,
-            self.trial_length,  # initial exploration steps
-            mbrl.planning.RandomAgent(env),
-            {},  # keyword arguments to pass to agent.act(),
-            self.context_len,
-            replay_buffer=self.replay_buffer,
-            trial_length=self.trial_length,
-            collect_full_trajectories=True,
-        )
-        print("# samples stored", self.replay_buffer.num_stored)
 
         agent_cfg = omegaconf.OmegaConf.create(
             {

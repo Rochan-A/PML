@@ -147,11 +147,19 @@ class TransitionRewardModel(Model):
         """
         if self.input_normalizer is None:
             return
-        obs, action = batch.obs, batch.act
-        if obs.ndim == 1:
-            obs = obs[None, :]
-            action = action[None, :]
-        model_in_np = np.concatenate([obs, action], axis=obs.ndim - 1)
+        if self.use_context:
+            obs, action, context = batch.obs, batch.act, batch.context
+            if obs.ndim == 1:
+                obs = obs[None, :]
+                action = action[None, :]
+                context = batch.context[None, :]
+            model_in_np = np.concatenate([context, obs, action], axis=obs.ndim - 1)
+        else:
+            obs, action = batch.obs, batch.act
+            if obs.ndim == 1:
+                obs = obs[None, :]
+                action = action[None, :]
+            model_in_np = np.concatenate([obs, action], axis=obs.ndim - 1)
         self.input_normalizer.update_stats(model_in_np)
 
     def loss(
@@ -379,7 +387,7 @@ class TransitionRewardModel(Model):
         return model_state
 
     def save(self, save_dir: Union[str, pathlib.Path]):
-        self.model.save(save_dir)
+        self.model.save(pathlib.Path(save_dir) / 'gaussian_mlp.pth')
         self.context_enc.save(save_dir)
         self.backbone_enc.save(save_dir)
         if self.input_normalizer:

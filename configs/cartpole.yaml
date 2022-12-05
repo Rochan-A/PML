@@ -1,11 +1,11 @@
 # Environment configuration
 env: CarpoleBalance          # env name
 train_params:                     # model contexts for training
-- masscart: [1., 1.1]
-  masspole: [0.1, 0.2]
-  polelength: [0.5, 0.6]
-  gravity: [9.8, 10.0]
-  force_mag: [10.0, 10.1]
+- masscart: [1., 1.3]
+  masspole: [0.1, 0.3]
+  polelength: [0.4, 0.6]
+  gravity: [9.7, 10.0]
+  force_mag: [9,8, 10.2]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
@@ -13,9 +13,9 @@ test_range:                       # model contexts for testing
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
-normalize_flag: False             # normalize state
+normalize_flag: True             # normalize state
 trail_length: 200                 # Inital traj count
-num_trials: 10                    # Number of episodes
+num_trials: 40                    # Number of episodes
 
 # Agent configuration
 agent:

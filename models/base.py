@@ -29,7 +29,6 @@ class Backbone(nn.Module):
         """Saves the model to the given directory."""
         model_dict = {
             "state_dict": self.state_dict(),
-            "elite_models": self.elite_models,
         }
         torch.save(model_dict, pathlib.Path(save_dir) / 'backbone.pth')
 
@@ -91,7 +90,6 @@ class ContextEncoder(nn.Module):
         """Saves the model to the given directory."""
         model_dict = {
             "state_dict": self.state_dict(),
-            "elite_models": self.elite_models,
         }
         torch.save(model_dict, pathlib.Path(save_dir) / 'context.pth')
 
