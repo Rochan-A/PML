@@ -1,10 +1,8 @@
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import omegaconf
 
-import mbrl.util.common as common_util
 import mbrl.models as models
 
 from models.transitionreward import *
@@ -25,8 +23,9 @@ import mbrl.types
 import mbrl.util.math
 
 from mbrl.planning.core import Agent
-from mbrl.planning.trajectory_opt import Optimizer, TrajectoryOptimizer
+from mbrl.planning.trajectory_opt import TrajectoryOptimizer
 from .replay_buffer import get_basic_buffer_iterators, create_replay_buffer
+
 
 class RollingHistoryContext:
     def __init__(self, K, state_sz, action_sz) -> None:
@@ -41,13 +40,15 @@ class RollingHistoryContext:
     def append(self, state, action=None):
         if self.prev_st is None:
             self.prev_st = state
+            n_state = state
         else:
-            state = state - self.prev_st
+            n_state = state - self.prev_st
+            self.prev_st = state
 
         if action is None:
             action = np.random.rand(self.action_sz)
 
-        k = np.concatenate([state, action], axis=0)
+        k = np.concatenate([n_state, action], axis=0)
         if self.store is None:
             self.store = np.repeat(k, self.K)
         else:
@@ -342,7 +343,7 @@ class Trainer(object):
         # Everything with "???" indicates an option with a missing value.
         # Our utility functions will fill in these details using the
         # environment information
-        in_sz = config.context.out_dim + config.backbone.out_dim if self.context_len is not None else env.observation_space.shape[0]+env.action_space.shape[0]
+        in_sz = config.context.out_dim + env.observation_space.shape[0] + env.action_space.shape[0] if self.context_len is not None else env.observation_space.shape[0]+env.action_space.shape[0]
         cfg_dict = {
             # dynamics model configuration
             "dynamics_model": {
@@ -372,7 +373,7 @@ class Trainer(object):
             # these are experiment specific options
             "overrides": {
                 "trial_length": self.trial_length,
-                "num_steps": self.num_trials * self.trial_length,
+                "num_steps": 10000,
                 "model_batch_size": config.dynamics.batch_size,
                 "validation_ratio": config.dynamics.validation_ratio,
             },
@@ -489,7 +490,7 @@ class Trainer(object):
 
             while not done:
                 # --------------- Model Training -----------------
-                if steps_trial == 0:
+                if steps_trial == 0 and trial % 2 == 0:
                     self.dynamics_model.update_normalizer(
                         self.replay_buffer.get_all()
                     )  # update normalizer stats
@@ -500,7 +501,7 @@ class Trainer(object):
                         val_ratio=self.cfg.overrides.validation_ratio,
                         ensemble_size=self.ensemble_size,
                         shuffle_each_epoch=True,
-                        bootstrap_permutes=False,  # build bootstrap dataset using sampling with replacement
+                        bootstrap_permutes=False, # build bootstrap dataset using sampling with replacement
                     )
 
                     self.model_trainer.train(

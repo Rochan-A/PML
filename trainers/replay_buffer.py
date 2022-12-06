@@ -300,7 +300,7 @@ class ReplayBuffer:
         )
         return self._batch_from_indices(indices)
 
-    def _batch_from_indices(self, indices: Sized) -> TransitionBatch:
+    def _batch_from_indices(self, indices: Sized):
         obs = self.obs[indices]
         next_obs = self.next_obs[indices]
         action = self.action[indices]
@@ -349,7 +349,7 @@ class ReplayBuffer:
         self.num_stored = num_stored
         self.cur_idx = self.num_stored % self.capacity
 
-    def get_all(self, shuffle: bool = False) -> TransitionBatch:
+    def get_all(self, shuffle: bool = False):
         """Returns all data stored in the replay buffer.
 
         Args:

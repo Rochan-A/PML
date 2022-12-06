@@ -5,50 +5,49 @@ train_params:                     # model contexts for training
   masspole: [0.1, 0.3]
   polelength: [0.4, 0.6]
   gravity: [9.7, 10.0]
-  force_mag: [9,8, 10.2]
+  force_mag: [9.8, 10.2]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
   polelength: [0.5, 0.7]
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
-n_itr: 10                         # number of time to re-run tests
 normalize_flag: True              # normalize input
 trail_length: 200                 # max len of episode
-num_trials: 20                    # Number of episodes
+num_trials: 30                    # Number of episodes
 
 # Agent configuration
 agent:
   horizon: 15                     # how long of the horizon to predict
   popsize: 500                    # how many random samples for mpc
-  alpha: 0.01
+  alpha: 0.1
   replan_freq: 1
-  num_iters: 20
+  num_iters: 5
   elite_ratio: 0.1
   max_particles: 20
 
 # Model arch parameters
 context:
-  hidden_dim: 128
-  hidden_layers: 1
-  out_dim: 64
-  history_size: 16
+  hidden_dim: 512
+  hidden_layers: 3
+  out_dim: 128
+  history_size: 32
   no_context: False
 
 backbone:
   hidden_dim: 128
-  hidden_layers: 1
+  hidden_layers: 3
   out_dim: 64
 
 head:
-  hidden_dim: 128
-  hidden_layers: 1
+  hidden_dim: 200
+  hidden_layers: 3
   ensemble_size: 5
 
 # Dynamics model training config
 dynamics:
-  learning_rate: 0.003
-  batch_size: 512
+  learning_rate: 0.001
+  batch_size: 64
   validation_ratio: 0.05         # ratio of validation set
 
 # "Trajectory-wise Multiple Choice Learning for Dynamics Generalization

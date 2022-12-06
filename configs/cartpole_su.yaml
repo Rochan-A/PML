@@ -1,11 +1,11 @@
 # Environment configuration
-env: CarpoleSwingUp          # env name
+env: CartpoleSwingUp          # env name
 train_params:                     # model contexts for training
-- masscart: [0.25, 0.5, 1.5, 2.5]
-  masspole: [0.5, 1.0, 1.5, 2.0]
-  polelength: [0.3, 0.5, 0.7]
-  gravity: [6.8, 9.8, 12.8]
-  force_mag: [5.0, 10.0, 15.0]
+- masscart: [0.5, 1.0]
+  masspole: [1.0, 1.5]
+  polelength: [0.4, 0.6]
+  gravity: [9.0, 10.0]
+  force_mag: [9.0, 11.0]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
@@ -13,43 +13,42 @@ test_range:                       # model contexts for testing
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
 n_itr: 10                         # number of time to re-run tests
-normalize_flag: False             # normalize state
+normalize_flag: True             # normalize state
 trail_length: 200                 # Inital traj count
-num_trials: 10                    # Number of episodes
+num_trials: 20                    # Number of episodes
 
 # Agent configuration
 agent:
-  horizon: 15                   # how long of the horizon to predict
-  popsize: 500                  # how many random samples for mpc
-  alpha: 0.01
+  horizon: 15                     # how long of the horizon to predict
+  popsize: 500                    # how many random samples for mpc
+  alpha: 0.1
   replan_freq: 1
-  num_iters: 20
+  num_iters: 5
   elite_ratio: 0.1
   max_particles: 20
 
 # Model arch parameters
 context:
-  hidden_dim: 256
-  hidden_layers: 1
-  out_dim: 128
+  hidden_dim: 200
+  hidden_layers: 2
+  out_dim: 64
   history_size: 16
+  no_context: True
 
 backbone:
-  hidden_dim: 256
-  hidden_layers: 1
-  out_dim: 128
+  hidden_dim: 200
+  hidden_layers: 2
+  out_dim: 64
 
 head:
-  load_model: False
-  model_path: "./saves/head.ckpt"
-  hidden_dim: 256
-  hidden_layers: 1
+  hidden_dim: 200
+  hidden_layers: 3
   ensemble_size: 5
 
 # Dynamics model training config
 dynamics:
-  learning_rate: 0.003
-  batch_size: 512
+  learning_rate: 0.001
+  batch_size: 32
   validation_ratio: 0.05         # ratio of validation set
 
 # "Trajectory-wise Multiple Choice Learning for Dynamics Generalization
