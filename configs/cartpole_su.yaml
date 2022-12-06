@@ -3,19 +3,18 @@ env: CartpoleSwingUp          # env name
 train_params:                     # model contexts for training
 - masscart: [0.5, 1.0]
   masspole: [1.0, 1.5]
-  polelength: [0.4, 0.6]
+  # polelength: [0.4, 0.6]
   gravity: [9.0, 10.0]
   force_mag: [9.0, 11.0]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
-  polelength: [0.5, 0.7]
+  # polelength: [0.5, 0.7]
   gravity: [9.8, 12.8]
   force_mag: [10.0, 15.0]
-n_itr: 10                         # number of time to re-run tests
-normalize_flag: True             # normalize state
-trail_length: 200                 # Inital traj count
-num_trials: 20                    # Number of episodes
+normalize_flag: True              # normalize input
+trail_length: 200                 # max len of episode
+num_trials: 30                    # Number of episodes
 
 # Agent configuration
 agent:
@@ -29,15 +28,15 @@ agent:
 
 # Model arch parameters
 context:
-  hidden_dim: 200
-  hidden_layers: 2
-  out_dim: 64
-  history_size: 16
-  no_context: True
+  hidden_dim: 512
+  hidden_layers: 3
+  out_dim: 128
+  history_size: 32
+  no_context: False
 
 backbone:
-  hidden_dim: 200
-  hidden_layers: 2
+  hidden_dim: 128
+  hidden_layers: 3
   out_dim: 64
 
 head:
@@ -48,7 +47,7 @@ head:
 # Dynamics model training config
 dynamics:
   learning_rate: 0.001
-  batch_size: 32
+  batch_size: 64
   validation_ratio: 0.05         # ratio of validation set
 
 # "Trajectory-wise Multiple Choice Learning for Dynamics Generalization

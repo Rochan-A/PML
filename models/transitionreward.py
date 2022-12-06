@@ -91,13 +91,13 @@ class TransitionRewardModel(Model):
         self.use_context = use_context
         self.model = model
         self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
-        self.backbone_enc = None # Backbone(**backbone_cfg).to(self.model.device)
+        self.backbone_enc = Backbone(**backbone_cfg).to(self.model.device)
 
         self.input_normalizer: Optional[mbrl.util.math.Normalizer] = None
         if normalize:
 
             if use_context:
-                in_size = self.context_enc.in_dim + 5 # self.backbone_enc.in_dim
+                in_size = self.context_enc.in_dim + self.backbone_enc.in_dim
             else:
                 in_size = self.model.in_size
 
@@ -106,6 +106,9 @@ class TransitionRewardModel(Model):
                 self.model.device,
                 dtype=torch.double if normalize_double_precision else torch.float,
             )
+
+        del self.backbone_enc
+
         self.device = self.model.device
         self.learned_rewards = learned_rewards
         self.target_is_delta = target_is_delta
@@ -155,7 +158,6 @@ class TransitionRewardModel(Model):
             target = target_obs
         return model_in.float(), target.float()
 
-    # I think we can ignore this for now, not used anywhere I know
     def forward(self, x: torch.Tensor, *args, **kwargs) -> Tuple[torch.Tensor, ...]:
         """Calls forward method of base model with the given input and args."""
         return self.model.forward(x, *args, **kwargs)
@@ -178,7 +180,7 @@ class TransitionRewardModel(Model):
             if obs.ndim == 1:
                 obs = obs[None, :]
                 action = action[None, :]
-                context = batch.context[None, :]
+                context = context[None, :]
             model_in_np = np.concatenate([context, obs, action], axis=obs.ndim - 1)
         else:
             obs, action = batch.obs, batch.act
@@ -208,24 +210,32 @@ class TransitionRewardModel(Model):
         assert target is None
         model_in, target = self._process_batch(batch)
         # VERY IMPORTANT
-        # split model_in -> [context, state, action]
+        # model_in -> [context, state, action]
         loss = 0
         if self.use_context:
             context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
             s = context.shape
+            c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
             if len(s) == 3:
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 c_embb = c_embb.reshape(s[0], s[1], -1)
                 c_mu = c_mu.reshape(s[0], s[1], -1)
                 c_log_var = c_log_var.reshape(s[0], s[1], -1)
             else:
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 c_embb = c_embb.reshape(s[0], -1)
                 c_mu = c_mu.reshape(s[0], -1)
                 c_log_var = c_log_var.reshape(s[0], -1)
 
+            # Context encoder loss based on:
+            # Generalized Hidden Parameter MDPs Transferable Model-based RL in a Handful of Trials
+            # https://arxiv.org/abs/2002.03072
+            loss += det_loss_kl(c_mu, c_log_var)
+
+            # forward pass over the backbone encoder
             # b_embb = self.backbone_enc.forward(s_t, a_t)
+
+            # Concatanate for input to heads
             model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
+
         loss += self.model.loss(model_in, target=target)
         return loss
 
@@ -262,13 +272,12 @@ class TransitionRewardModel(Model):
             # Monte Carlo sample from p(c), and avg loss -- context encoder
             loss_and_maybe_meta = []
             for m in range(MC_SAMPLES):
+                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 if len(s) == 3:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], s[1], -1)
                     c_mu = c_mu.reshape(s[0], s[1], -1)
                     c_log_var = c_log_var.reshape(s[0], s[1], -1)
                 else:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], -1)
                     c_mu = c_mu.reshape(s[0], -1)
                     c_log_var = c_log_var.reshape(s[0], -1)
@@ -342,13 +351,12 @@ class TransitionRewardModel(Model):
                 context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
                 # print('before: ', context.shape)
                 s = context.shape
+                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 if len(s) == 3:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], s[1], -1)
                     c_mu = c_mu.reshape(s[0], s[1], -1)
                     c_log_var = c_log_var.reshape(s[0], s[1], -1)
                 else:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], -1)
                     c_mu = c_mu.reshape(s[0], -1)
                     c_log_var = c_log_var.reshape(s[0], -1)
@@ -376,13 +384,12 @@ class TransitionRewardModel(Model):
             if self.use_context:
                 context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
                 s = context.shape
+                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 if len(s) == 3:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], s[1], -1)
                     c_mu = c_mu.reshape(s[0], s[1], -1)
                     c_log_var = c_log_var.reshape(s[0], s[1], -1)
                 else:
-                    c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                     c_embb = c_embb.reshape(s[0], -1)
                     c_mu = c_mu.reshape(s[0], -1)
                     c_log_var = c_log_var.reshape(s[0], -1)
@@ -435,13 +442,12 @@ class TransitionRewardModel(Model):
         if self.use_context:
             context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
             s = context.shape
+            c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
             if len(s) == 3:
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 c_embb = c_embb.reshape(s[0], s[1], -1)
                 c_mu = c_mu.reshape(s[0], s[1], -1)
                 c_log_var = c_log_var.reshape(s[0], s[1], -1)
             else:
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 c_embb = c_embb.reshape(s[0], -1)
                 c_mu = c_mu.reshape(s[0], -1)
                 c_log_var = c_log_var.reshape(s[0], -1)

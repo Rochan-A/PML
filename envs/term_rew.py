@@ -19,7 +19,10 @@ def cartpole_upright_reward(action, next_state):
     return k
 
 def cartpole_swingup_term(action, state):
-    done = (state[:, 0] < -2.4) or (state[:, 0] > 2.4)
+    ones = torch.ones((state.shape[0]), device=state.device)
+    zeros = torch.zeros((state.shape[0]), device=state.device)
+    done = torch.where(state[:, 0] < -2.4, ones, zeros) + torch.where(state[:, 0] > 2.4, ones, zeros)
+    done = torch.where(done >= 1, ones, zeros).reshape(-1, 1) > 0
     return done
 
 class cartpole_swingup_rew:
@@ -30,7 +33,7 @@ class cartpole_swingup_rew:
         x, cos_theta, sin_theta = next_state[:, 0], next_state[:, 2], next_state[:, 3]
         theta = 2*torch.arctan(sin_theta/(1 + cos_theta))
         length = self.l  # pole length
-        x_tip_error = x - length * np.sin(theta)
-        y_tip_error = length - length * np.cos(theta)
-        reward = np.exp(-(x_tip_error ** 2 + y_tip_error ** 2) / length ** 2)
-        return torch.tensor([reward], dtype=torch.float32, device=next_state.device)
+        x_tip_error = x - length * torch.sin(theta)
+        y_tip_error = length - length * torch.cos(theta)
+        reward = torch.exp(-(x_tip_error ** 2 + y_tip_error ** 2) / length ** 2)
+        return reward.reshape(-1, 1)
