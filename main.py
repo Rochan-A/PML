@@ -86,7 +86,7 @@ def train(args, config, PATH):
         env, _ = env_fam.reset()
 
         term_fn = cartpole_swingup_term
-        reward_fn = cartpole_swingup_rew(env.l)
+        reward_fn = None # cartpole_swingup_rew(env.l)
 
     writer = SummaryWriter(PATH)
 

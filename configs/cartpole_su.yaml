@@ -2,10 +2,10 @@
 env: CartpoleSwingUp          # env name
 train_params:                     # model contexts for training
 - masscart: [0.5, 1.0]
-  masspole: [1.0, 1.5]
+  masspole: [0.5, 1.0]
   # polelength: [0.4, 0.6]
-  gravity: [9.0, 10.0]
-  force_mag: [9.0, 11.0]
+  gravity: [9.8, 12.0]
+  force_mag: [20.0, 22.0]
 test_range:                       # model contexts for testing
 - masscart: [1.5, 2.5]
   masspole: [1.5, 2.0]
@@ -14,7 +14,7 @@ test_range:                       # model contexts for testing
   force_mag: [10.0, 15.0]
 normalize_flag: True              # normalize input
 trail_length: 200                 # max len of episode
-num_trials: 30                    # Number of episodes
+num_trials: 10                    # Number of episodes
 
 # Agent configuration
 agent:
@@ -28,7 +28,7 @@ agent:
 
 # Model arch parameters
 context:
-  hidden_dim: 512
+  hidden_dim: 200
   hidden_layers: 3
   out_dim: 128
   history_size: 32
