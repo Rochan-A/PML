@@ -1,3 +1,4 @@
+import pickle as pkl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -538,7 +539,22 @@ class Trainer(object):
             all_rewards.append(total_reward)
 
         self.dynamics_model.save(PATH)
+
+        #NEEDS EDITS
+        #data_file = ""
+        #save_to_file(self, train_losses, val_scores, all_rewards, data_file)
+
         return train_losses, val_scores, all_rewards
+    
+    def save_to_file(self, train_losses, val_scores, all_rewards, data_file):
+
+        data_dict = {}
+        data_dict['train_losses'] = train_losses
+        data_dict['val_scores'] = val_scores
+        data_dict['all_rewards'] = all_rewards
+        
+        with open(data_file, 'wb') as f:
+            pkl.dump(data_dict, f)
 
 
     def plot(self, data, path, xlabels, ylabels):

@@ -1,3 +1,4 @@
+import pickle as pkl
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -370,7 +371,23 @@ class Tester(object):
                     break
             all_rewards.append(total_reward)
 
+            #NEEDS EDITS
+            #data_file = ""
+            #save_to_file(self, total_reward, data_file)
+
         return all_rewards
+
+    def save_to_file(self, total_reward, data_file):
+
+        data_dict = {}
+        data_dict['total_reward'] = total_reward
+
+        with open(data_file, 'wb') as f:
+            pkl.dump(data_dict, f)
+
+
+
+
 
 
     def plot(self, data, path, xlabels, ylabels):
