@@ -582,7 +582,7 @@ class Trainer(object):
                 'train_losses': train_losses,
                 'val_scores': val_scores,
                 'rewards': all_rewards,
-                'model': self.dynamics_model
+                'model': self.model_env
             }
 
     def plot(self, data, path, xlabels, ylabels):

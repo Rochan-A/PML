@@ -2,21 +2,20 @@ import yaml, math
 from easydict import EasyDict
 from pathlib import Path
 from os.path import join
-
+import numpy as np
 import argparse, datetime
+from pprint import pprint
 
 import torch
 
 from tensorboardX import SummaryWriter
 
-from trainers import Trainer, Tester
-from envs import ContexualEnv, DummyContextualEnv
-
 import mbrl.env.cartpole_continuous as cartpole_env
 import mbrl.env.reward_fns as reward_fns
 import mbrl.env.termination_fns as termination_fns
 
-from envs.term_rew import *
+from trainers import Trainer, Tester
+from envs import ContexualEnv, DummyContextualEnv, configure_reward_fn, configure_term_fn
 
 
 def make_dirs(directory):
@@ -49,8 +48,6 @@ def gen_save_path(args, config):
     else:
         PATH = join(PATH, "raw")
 
-
-    # TODO: add params to path
     PATH = join(PATH, "seed_" + str(args.seed))
     DT = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
     PATH = join(PATH, DT)
@@ -70,56 +67,54 @@ def train(args, config, PATH):
         PATH (str): save path
     """
 
+    rng = np.random.default_rng(args.seed)
+
     if args.mdp:
+        # For testing implementation
         import gym
         env = cartpole_env.CartPoleEnv()
         env.seed(args.seed)
-        env_fam = DummyContextualEnv(env)
+        env_fam = DummyContextualEnv(env, rng)
 
-        # This functions allows the model to evaluate the true rewards given an observation 
+        # This functions allows the model to evaluate the true rewards given
+        # an observation 
         reward_fn = reward_fns.cartpole
-        # This function allows the model to know if an observation should make the episode end
+        # This function allows the model to know if an observation should make
+        # the episode end
         term_fn = termination_fns.cartpole
     else:
         # Contextual env
-        env_fam = ContexualEnv(config)
+        env_fam = ContexualEnv(config, rng)
         env, _ = env_fam.reset()
 
-        term_fn = cartpole_swingup_term
-        reward_fn = None # cartpole_swingup_rew(env.l)
+        term_fn = configure_term_fn(config)
+        reward_fn = configure_reward_fn(config)
 
     writer = SummaryWriter(PATH)
 
+    trainer_cfg = {
+        'env': env,
+        'env_fam': env_fam,
+        'config': config,
+        'reward_fn': reward_fn,
+        'term_fn': term_fn,
+        'args': args,
+        'writer': writer,
+        'no_test_flag': args.no_test_flag,
+        'rng': rng,
+        'save_path': PATH
+    }
+    print('Trainer_cfg')
+    pprint(trainer_cfg)
+
     # Initialize Trainer
-    algo = Trainer(
-        env=env,
-        env_fam=env_fam,
-        config=config,
-        reward_fn=reward_fn,
-        term_fn=term_fn,
-        args=args,
-        writer=writer,
-        no_test_flag=args.no_test_flag,
-        only_test_flag=args.only_test_flag
-    )
+    algo = Trainer(**trainer_cfg)
+    data = algo.run(env_fam, env, PATH)
 
-    train_losses, val_scores, all_rewards = algo.run(env_fam, env, PATH)
-
-    algo.plot(
-        [train_losses, val_scores],
-        join(args.root, 'plot.png'),
-        ["Epoch", "Epoch"],
-        ["Training loss (avg. NLL)", "Validation score (avg. MSE)"]
-    )
-    algo.plot_single(
-        all_rewards,
-        join(args.root,'rewards.png'),
-        xlabel="Trial",
-        ylabel="Reward"
-    )
+    return data
 
 
-def test(args, config):
+def test(args, config, model=None):
     """test
 
     Args
@@ -128,42 +123,41 @@ def test(args, config):
         config (easydict): config read from file
     """
 
+    rng = np.random.default_rng(args.seed)
+
     if args.mdp:
         import gym
         env = cartpole_env.CartPoleEnv()
         env.seed(args.seed)
         env_fam = DummyContextualEnv(env)
 
-        # This functions allows the model to evaluate the true rewards given an observation 
+        # This functions allows the model to evaluate the true rewards given
+        # an observation 
         reward_fn = reward_fns.cartpole
-        # This function allows the model to know if an observation should make the episode end
+        # This function allows the model to know if an observation should make
+        # the episode end
         term_fn = termination_fns.cartpole
     else:
         # Contextual env
-        env_fam = ContexualEnv(config)
+        env_fam = ContexualEnv(config, rng)
         env, _ = env_fam.reset()
 
-        term_fn = cartpole_upright_term
-        reward_fn = cartpole_upright_reward
+        term_fn = configure_term_fn(config)
+        reward_fn = configure_reward_fn(config)
 
-    # Add stuff
-    tester = Tester(
-        env,
-        env_fam,
-        reward_fn,
-        term_fn,
-        config,
-        args
-    )
+    tester_cfg = {
+        'env': env,
+        'config': config,
+        'reward_fn': reward_fn,
+        'term_fn': term_fn,
+        'model': model,
+        'args': args
+    }
+    print('tester_cfg')
+    pprint(tester_cfg)
 
-    all_rewards = tester.run(env_fam, env)
-
-    tester.plot_single(
-        all_rewards,
-        join(args.root,'test-rewards.png'),
-        xlabel="Trial",
-        ylabel="Reward"
-    )
+    tester = Tester(**tester_cfg)
+    data = tester.run(env_fam, env)
 
 
 if __name__ == "__main__":
@@ -171,6 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", help="config file")
     parser.add_argument("--root", default="./saves/", help="experiments name")
     parser.add_argument("--load", help="path to load models from")
+    parser.add_argument("--logger", action="store_true", help="Print training log")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")
     parser.add_argument("--cuda", type=int, default=0, help="CUDA device idx")
     parser.add_argument(
@@ -197,9 +192,9 @@ if __name__ == "__main__":
     make_dirs(PATH)
 
     if args.no_test_flag:
-        train(args, config, PATH)
+        _ = train(args, config, PATH)
     elif args.only_test_flag:
         test(args, config)
     else:
-        train(args, config, PATH)
-        test(args, config)
+        data = train(args, config, PATH)
+        test(args, config, data['model'])
