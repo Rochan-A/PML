@@ -7,22 +7,19 @@ from typing import Any, Dict, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import torch
+import hydra
 
 import mbrl.models.util as model_util
 import mbrl.types
 import mbrl.util.math
 
 from mbrl.models.model import Ensemble, Model
-import hydra
-from .base import Backbone, ContextEncoder
+from .base import StateActionEncoder, ContextEncoder
 
-
-MC_SAMPLES = 2
 
 def ll_gaussian(y, mu, log_var):
     sigma = torch.exp(0.5 * log_var)
     return -0.5 * torch.log(2 * np.pi * sigma**2) - (1 / (2 * sigma**2))* (y-mu)**2
-
 
 def elbo(y_pred, mu, log_var):
     # prior probability of y_pred
@@ -34,12 +31,12 @@ def elbo(y_pred, mu, log_var):
     # by taking the mean we approximate the expectation
     return (log_prior - log_p_q).mean()
 
-
-def det_loss(y_pred, y, mu, log_var):
-    return -elbo(y_pred, y, mu, log_var)
-
+def det_loss(y_pred, mu, log_var):
+    # Neg of elbo without reconstruction loss term
+    return -elbo(y_pred, mu, log_var)
 
 def det_loss_kl(mu, log_var):
+    # KL( p(z) || q(z) )
     kl_divergence = (-0.5 * torch.sum(1 + log_var - mu**2 - log_var.exp()))
     return kl_divergence.sum()
 
@@ -48,7 +45,7 @@ class TransitionRewardModel(Model):
     """
     Model inputs/outputs will be consistent with
 
-        [pred_obs_{t+1}, pred_rewards_{t+1} (optional)] = model([obs_t, action_t, history_vec]).
+        [pred_obs_{t+1}, pred_rewards_{t+1} (optional)] = model([obs_t, action_t, context]).
 
     To use with :class:mbrl.models.ModelEnv`, the wrapped model must define methods
     ``reset_1d`` and ``sample_1d``.
@@ -78,7 +75,7 @@ class TransitionRewardModel(Model):
         self,
         model: Model,
         context_cfg: dict,
-        backbone_cfg: dict,
+        stateaction_cfg: dict,
         use_context = False,
         target_is_delta: bool = True,
         normalize: bool = False,
@@ -89,25 +86,23 @@ class TransitionRewardModel(Model):
         super().__init__(model.device)
 
         self.use_context = use_context
-        self.model = model
+        self.model = model  # GaussianMLP model
         self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
-        self.backbone_enc = Backbone(**backbone_cfg).to(self.model.device)
+        self.stateaction_enc = StateActionEncoder(**stateaction_cfg).to(self.model.device)
 
+        # we only normalize the current state, action.
+        # Context encoder is using difference so we cannot normalize it 
         self.input_normalizer: Optional[mbrl.util.math.Normalizer] = None
         if normalize:
-
             if use_context:
-                in_size = self.context_enc.in_dim + self.backbone_enc.in_dim
+                in_size = self.stateaction_enc.in_dim
             else:
                 in_size = self.model.in_size
-
             self.input_normalizer = mbrl.util.math.Normalizer(
                 in_size,
                 self.model.device,
                 dtype=torch.double if normalize_double_precision else torch.float,
             )
-
-        del self.backbone_enc
 
         self.device = self.model.device
         self.learned_rewards = learned_rewards
@@ -125,14 +120,13 @@ class TransitionRewardModel(Model):
     ) -> torch.Tensor:
         obs = model_util.to_tensor(obs).to(self.device)
         action = model_util.to_tensor(action).to(self.device)
-        d = [obs, action]
-        if context is not None:
-            context = model_util.to_tensor(context).to(self.device)
-            d = [context,] + d
-        model_in = torch.cat(d, dim=obs.ndim - 1)
+        model_in = torch.cat([obs, action], dim=obs.ndim - 1)
         if self.input_normalizer:
             # Normalizer lives on device
             model_in = self.input_normalizer.normalize(model_in).float().to(self.device)
+        if context is not None:
+            context = model_util.to_tensor(context).float().to(self.device)
+            model_in = torch.cat([context, model_in], dim=obs.ndim - 1)
         return model_in
 
     def _process_batch(
@@ -175,19 +169,11 @@ class TransitionRewardModel(Model):
         """
         if self.input_normalizer is None:
             return
-        if self.use_context:
-            obs, action, context = batch.obs, batch.act, batch.context
-            if obs.ndim == 1:
-                obs = obs[None, :]
-                action = action[None, :]
-                context = context[None, :]
-            model_in_np = np.concatenate([context, obs, action], axis=obs.ndim - 1)
-        else:
-            obs, action = batch.obs, batch.act
-            if obs.ndim == 1:
-                obs = obs[None, :]
-                action = action[None, :]
-            model_in_np = np.concatenate([obs, action], axis=obs.ndim - 1)
+        obs, action = batch.obs, batch.act
+        if obs.ndim == 1:
+            obs = obs[None, :]
+            action = action[None, :]
+        model_in_np = np.concatenate([obs, action], axis=obs.ndim - 1)
         self.input_normalizer.update_stats(model_in_np)
 
     def loss(
@@ -209,12 +195,15 @@ class TransitionRewardModel(Model):
         """
         assert target is None
         model_in, target = self._process_batch(batch)
-        # VERY IMPORTANT
-        # model_in -> [context, state, action]
+
         loss = 0
+
         if self.use_context:
-            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            context = model_in[..., :self.context_enc.in_dim]
+            s_t = model_in[..., self.context_enc.in_dim:-1]
+            a_t = model_in[..., -1:]
             s = context.shape
+
             c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
             if len(s) == 3:
                 c_embb = c_embb.reshape(s[0], s[1], -1)
@@ -231,10 +220,8 @@ class TransitionRewardModel(Model):
             loss += det_loss_kl(c_mu, c_log_var)
 
             # forward pass over the backbone encoder
-            # b_embb = self.backbone_enc.forward(s_t, a_t)
-
-            # Concatanate for input to heads
-            model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
+            b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+            model_in = torch.cat([c_embb, b_embb], dim=-1)
 
         loss += self.model.loss(model_in, target=target)
         return loss
@@ -263,7 +250,7 @@ class TransitionRewardModel(Model):
         loss = 0
         if self.use_context:
             self.context_enc.train()
-            # self.backbone_enc.train()
+            self.stateaction_enc.train()
 
             # Forward pass over the context encoder
             context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
@@ -271,7 +258,7 @@ class TransitionRewardModel(Model):
 
             # Monte Carlo sample from p(c), and avg loss -- context encoder
             loss_and_maybe_meta = []
-            for m in range(MC_SAMPLES):
+            for m in range(2):
                 c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 if len(s) == 3:
                     c_embb = c_embb.reshape(s[0], s[1], -1)
@@ -288,10 +275,8 @@ class TransitionRewardModel(Model):
                 loss += det_loss_kl(c_mu, c_log_var)
 
                 # forward pass over the backbone encoder
-                # b_embb = self.backbone_enc.forward(s_t, a_t)
-
-                # Concatanate for input to heads
-                model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
 
                 # Update the model using backpropagation with given input and target tensors.
                 # if self.deterministic: returns self._mse_loss(model_in, target), {} else returns self._nll_loss(model_in, target), {}
@@ -349,7 +334,6 @@ class TransitionRewardModel(Model):
             model_in, target = self._process_batch(batch)
             if self.use_context:
                 context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
-                # print('before: ', context.shape)
                 s = context.shape
                 c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
                 if len(s) == 3:
@@ -360,8 +344,8 @@ class TransitionRewardModel(Model):
                     c_embb = c_embb.reshape(s[0], -1)
                     c_mu = c_mu.reshape(s[0], -1)
                     c_log_var = c_log_var.reshape(s[0], -1)
-                # b_embb = self.backbone_enc.forward(s_t, a_t)
-                model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
             return self.model.eval_score(model_in, target=target)
 
     def get_output_and_targets(
@@ -393,9 +377,8 @@ class TransitionRewardModel(Model):
                     c_embb = c_embb.reshape(s[0], -1)
                     c_mu = c_mu.reshape(s[0], -1)
                     c_log_var = c_log_var.reshape(s[0], -1)
-
-                # b_embb = self.backbone_enc.forward(s_t, a_t)
-                model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
             output = self.model.forward(model_in)
         return output, target
 
@@ -451,10 +434,8 @@ class TransitionRewardModel(Model):
                 c_embb = c_embb.reshape(s[0], -1)
                 c_mu = c_mu.reshape(s[0], -1)
                 c_log_var = c_log_var.reshape(s[0], -1)
-
-            # b_embb = self.backbone_enc.forward(s_t, a_t)
-            model_in = torch.cat([c_embb, s_t, a_t], dim=-1)
-
+            b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+            model_in = torch.cat([c_embb, b_embb], dim=-1)
         preds, next_model_state = self.model.sample_1d(
             model_in, model_state, rng=rng, deterministic=deterministic
         )
@@ -492,14 +473,14 @@ class TransitionRewardModel(Model):
     def save(self, save_dir: Union[str, pathlib.Path]):
         self.model.save(pathlib.Path(save_dir) / 'gaussian_mlp.pth')
         self.context_enc.save(save_dir)
-        # self.backbone_enc.save(save_dir)
+        self.stateaction_enc.save(save_dir)
         if self.input_normalizer:
             self.input_normalizer.save(save_dir)
 
     def load(self, load_dir: Union[str, pathlib.Path]):
         self.model.load(pathlib.Path(load_dir) / 'gaussian_mlp.pth')
         self.context_enc.load(load_dir)
-        # self.backbone_enc.load(load_dir)
+        self.stateaction_enc.load(load_dir)
         if self.input_normalizer:
             self.input_normalizer.load(load_dir)
 

@@ -1,4 +1,4 @@
-import random
+import numpy as np
 from .CartpoleBalance import CartPoleEnv_template
 from .CartpoleSwingup import CartPoleSwingUpEnv_template
 
@@ -21,28 +21,29 @@ CARTPOLE_SWINGUP_LIMITS = {
 
 
 class ContextSampler:
-    def __init__(self, params) -> None:
+    def __init__(self, params, rng: np.random.Generator) -> None:
         self.param_keys = list(params.keys())
         self.param_vals = list(params.values())
         self.selection = "choice" if len(self.param_vals[0]) > 2 else "random"
+        self.rng = rng
 
     def sample(self):
         if self.selection == "choice":
             return {
-                key: random.choice(values) for key, values in zip(self.param_keys, self.param_vals) 
+                key: self.rng.choice(values) for key, values in zip(self.param_keys, self.param_vals) 
             }
         else:
             return {
-                key: random.uniform(values[0], values[1]) for key, values in zip(self.param_keys, self.param_vals) 
+                key: self.rng.uniform(values[0], values[1]) for key, values in zip(self.param_keys, self.param_vals) 
             }
 
 
 class ContexualEnv():
-    def __init__(self, config) -> None:
+    def __init__(self, config, rng) -> None:
         super().__init__()
 
-        self.c_train = ContextSampler(config.train_params[0])
-        self.c_test = ContextSampler(config.test_range[0])
+        self.c_train = ContextSampler(config.train_params[0], rng)
+        self.c_test = ContextSampler(config.test_range[0], rng)
 
         if config.env == 'CartpoleBalance':
             self.env = CartPoleEnv_template
@@ -65,9 +66,10 @@ class ContexualEnv():
 
 
 class DummyContextualEnv():
-    def __init__(self, env) -> None:
+    """Wrapper over Gym.env to convert to Contextual Env.
+    Returns orginal env at each sample"""
+    def __init__(self, env, rng) -> None:
         super().__init__()
-
         self.env = env
 
         self.observation_space = env.observation_space
@@ -81,11 +83,14 @@ if __name__=='__main__':
     import yaml
     from easydict import EasyDict
 
+    seed = 0
+    rng = np.random.default_rng(seed)
+
     with open('./configs/cartpole.yaml') as f:
         config = yaml.safe_load(f)
     config = EasyDict(config)
 
-    env_fam = ContexualEnv(config)
+    env_fam = ContexualEnv(config, rng)
 
     print('#'*80)
     print('sampled training contexts')
@@ -102,6 +107,6 @@ if __name__=='__main__':
     s = env.reset()
     done = False
     while not done:
-        a = random.random()*2 - 1
+        a = np.random.random()*2 - 1
         s, r, done, _ = env.step([a])
         print(s, r, done)

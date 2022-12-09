@@ -26,7 +26,7 @@ class CartPoleSwingUpEnv_template(gym.Env):
         'video.frames_per_second': 100
     }
 
-    def __init__(self, masscart=0.5, masspole=0.5, polelength=0.5, gravity=9.8, force_mag=20.0):
+    def __init__(self, masscart=0.5, masspole=0.5, polelength=0.6, gravity=9.8, force_mag=20.0):
         self.g = gravity  # gravity
         self.m_c = masscart  # cart mass, default 0.5
         self.m_p = masspole  # pendulum mass, default 0.5

@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 class CartPoleEnv_template(gym.Env):
     """
     Description:
-        A pole is attached by an un-actuated joint to a cart, which moves along a frictionless track. The pendulum starts upright, and the goal is to prevent it from falling over by increasing and reducing the cart's velocity.
+        A pole is attached by an un-actuated joint to a cart, which moves along
+        a frictionless track. The pendulum starts upright, and the goal is to
+        prevent it from falling over by increasing and reducing the cart's velocity.
     Source:
         This environment corresponds to the version of the cart-pole problem described by Barto, Sutton, and Anderson
     Observation:
@@ -39,8 +41,8 @@ class CartPoleEnv_template(gym.Env):
         Num	Action
         0	Push cart to the left
         1	Push cart to the right
-	or
-	Type: Continuous [-1,1]
+        or
+        Type: Continuous [-1,1]
 
         Note: The amount the velocity that is reduced or increased is not fixed;
         it depends on the angle the pole is pointing.

@@ -1,5 +1,4 @@
 import torch, math
-import numpy as np
 
 def cartpole_upright_term(action, state):
     done = (state[:, 0] < -2.4) \
@@ -25,15 +24,30 @@ def cartpole_swingup_term(action, state):
     done = torch.where(done >= 1, ones, zeros).reshape(-1, 1) > 0
     return done
 
-class cartpole_swingup_rew:
-    def __init__(self, l) -> None:
-        self.l = l
+def cartpole_swingup_reward(action, next_state):
+    x, cos_theta, sin_theta = next_state[:, 0], next_state[:, 2], next_state[:, 3]
+    theta = 2*torch.arctan(sin_theta/(1 + cos_theta))
+    length = 0.6
+    x_tip_error = x - length * torch.sin(theta)
+    y_tip_error = length - length * torch.cos(theta)
+    reward = torch.exp(-(x_tip_error ** 2 + y_tip_error ** 2) / length ** 2)
+    return reward.reshape(-1, 1)
 
-    def __call__(self, action, next_state):
-        x, cos_theta, sin_theta = next_state[:, 0], next_state[:, 2], next_state[:, 3]
-        theta = 2*torch.arctan(sin_theta/(1 + cos_theta))
-        length = self.l  # pole length
-        x_tip_error = x - length * torch.sin(theta)
-        y_tip_error = length - length * torch.cos(theta)
-        reward = torch.exp(-(x_tip_error ** 2 + y_tip_error ** 2) / length ** 2)
-        return reward.reshape(-1, 1)
+
+def configure_reward_fn(config):
+    if not config.reward_fn:
+        return None
+    if config.env == 'CartpoleSwingUp':
+        return cartpole_swingup_reward
+    elif config.env == 'CartpoleBalance':
+        return cartpole_upright_reward
+    else:
+        raise NotImplementedError
+
+def configure_term_fn(config):
+    if config.env == 'CartpoleSwingUp':
+        return cartpole_swingup_term
+    elif config.env == 'CartpoleBalance':
+        return cartpole_upright_term
+    else:
+        raise NotImplementedError
