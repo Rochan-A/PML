@@ -54,7 +54,7 @@ class Tester(object):
         generator.manual_seed(args.seed)
 
         if model is None:
-            self.ensemble_size = config.head.ensemble_size
+            self.ensemble_size = config.transitionreward.ensemble_size
             self.context_len = None if config.context.no_context else config.context.history_size
 
 
@@ -70,9 +70,9 @@ class Tester(object):
                     "model": {
                         "_target_": "mbrl.models.GaussianMLP",
                         "device": str(config["device"]),
-                        "num_layers": config.head.hidden_layers,
+                        "num_layers": config.transitionreward.hidden_layers,
                         "ensemble_size": self.ensemble_size,
-                        "hid_size": config.head.hidden_dim,
+                        "hid_size": config.transitionreward.hidden_dim,
                         "in_size": in_sz,
                         "out_size": "???",
                         "deterministic": False,
@@ -100,17 +100,17 @@ class Tester(object):
             }
             self.cfg = omegaconf.OmegaConf.create(cfg_dict)
 
-            # Contruct context, backbone encoder configs
+            # Contruct context, stateaction encoder configs
             self.context_cfg = config.context
             self.context_cfg["state_sz"] = env.observation_space.shape[0]
             self.context_cfg["action_sz"] = env.action_space.shape[0]
-            self.backbone_cfg = config.backbone
-            self.backbone_cfg["state_sz"] = env.observation_space.shape[0]
-            self.backbone_cfg["action_sz"] = env.action_space.shape[0]
+            self.stateaction_cfg = config.stateaction
+            self.stateaction_cfg["state_sz"] = env.observation_space.shape[0]
+            self.stateaction_cfg["action_sz"] = env.action_space.shape[0]
 
             # Create a dynamics model for this environment
             self.dynamics_model = create_model(
-                self.cfg, self.context_cfg, self.backbone_cfg, False if self.context_len is None else True
+                self.cfg, self.context_cfg, self.stateaction_cfg, False if self.context_len is None else True
             )
 
             # load the model
@@ -152,7 +152,7 @@ class Tester(object):
         self.agent = create_agent(agent_cfg, self.model_env, config)
 
 
-    def run(self, env_fam, env, PATH):
+    def run(self, env_fam, env, num_trials, PATH):
         if self.context_len:
             rhc = RollingHistoryContext(
                 K=self.context_len,
@@ -161,7 +161,7 @@ class Tester(object):
             )
 
         all_rewards = [0]
-        for trial in range(self.num_trials):
+        for trial in range(num_trials):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.

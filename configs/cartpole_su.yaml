@@ -8,10 +8,10 @@ train_params:                     # model contexts for training
   # force_mag: [18.0, 22.0]
 test_range:                       # model contexts for testing
 - polelength: [0.5, 0.7]
-  masspole: [1.5, 2.0]
-  masscart: [1.5, 2.5]
-  gravity: [9.8, 12.8]
-  force_mag: [10.0, 15.0]
+  # masspole: [1.5, 2.0]
+  # masscart: [1.5, 2.5]
+  # gravity: [9.8, 12.8]
+  # force_mag: [10.0, 15.0]
 normalize_flag: True              # normalize input
 
 trail_length: 200                 # max len of episode
