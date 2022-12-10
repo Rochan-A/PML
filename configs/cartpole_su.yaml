@@ -12,11 +12,11 @@ test_range:                       # model contexts for testing
   # masscart: [1.5, 2.5]
   # gravity: [9.8, 12.8]
   # force_mag: [10.0, 15.0]
-normalize_flag: True              # normalize input
+normalize_flag: False              # normalize input
 
 trail_length: 200                 # max len of episode
-init_trials: 50                   # Number of initial trials to fill replay buffer
-num_trials: 50                    # Number of episodes w/ agent actions
+init_trials: 30                   # Number of initial trials to fill replay buffer
+num_trials: 30                    # Number of episodes w/ agent actions
 replay_buffer_sz: 10000
 
 reward_fn: False                  # Use reward function or not

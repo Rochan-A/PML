@@ -52,11 +52,10 @@ class Tester(object):
         self.num_trials = config.num_trials
         generator = torch.Generator(device=config["device"])
         generator.manual_seed(args.seed)
+        self.context_len = None if config.context.no_context else config.context.history_size
 
         if model is None:
             self.ensemble_size = config.transitionreward.ensemble_size
-            self.context_len = None if config.context.no_context else config.context.history_size
-
 
             # Everything with "???" indicates an option with a missing value.
             # Our utility functions will fill in these details using the

@@ -94,10 +94,7 @@ class TransitionRewardModel(Model):
         # Context encoder is using difference so we cannot normalize it 
         self.input_normalizer: Optional[mbrl.util.math.Normalizer] = None
         if normalize:
-            if use_context:
-                in_size = self.stateaction_enc.in_dim
-            else:
-                in_size = self.model.in_size
+            in_size = self.stateaction_enc.in_dim
             self.input_normalizer = mbrl.util.math.Normalizer(
                 in_size,
                 self.model.device,
@@ -196,8 +193,6 @@ class TransitionRewardModel(Model):
         assert target is None
         model_in, target = self._process_batch(batch)
 
-        loss = 0
-
         if self.use_context:
             context = model_in[..., :self.context_enc.in_dim]
             s_t = model_in[..., self.context_enc.in_dim:-1]
@@ -222,8 +217,13 @@ class TransitionRewardModel(Model):
             # forward pass over the backbone encoder
             b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
             model_in = torch.cat([c_embb, b_embb], dim=-1)
-
-        loss += self.model.loss(model_in, target=target)
+            loss += self.model.loss(model_in, target=target)
+        else:
+            s_t = model_in[..., :-1]
+            a_t = model_in[..., -1:]
+            # forward pass over the backbone encoder
+            b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+            loss += self.model.loss(b_embb, target=target)
         return loss
 
     def update(
@@ -286,7 +286,11 @@ class TransitionRewardModel(Model):
         else:
             # Update the model using backpropagation with given input and target tensors.
             # if self.deterministic: returns self._mse_loss(model_in, target), {} else returns self._nll_loss(model_in, target), {}
-            loss_and_maybe_meta = self.model.loss(model_in, target)[0]
+            s_t = model_in[..., :-1]
+            a_t = model_in[..., -1:]
+            # forward pass over the backbone encoder
+            b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+            loss_and_maybe_meta = self.model.loss(b_embb, target)[0]
 
         if isinstance(loss_and_maybe_meta, tuple):
             # TODO - v0.2.0 remove this back-compatibility logic
@@ -346,7 +350,13 @@ class TransitionRewardModel(Model):
                     c_log_var = c_log_var.reshape(s[0], -1)
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
-            return self.model.eval_score(model_in, target=target)
+                return self.model.eval_score(model_in, target=target)
+            else:
+                s_t = model_in[..., :-1]
+                a_t = model_in[..., -1:]
+                # forward pass over the backbone encoder
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                return self.model.eval_score(b_embb, target=target)
 
     def get_output_and_targets(
         self, batch: mbrl.types.TransitionBatch
@@ -379,8 +389,15 @@ class TransitionRewardModel(Model):
                     c_log_var = c_log_var.reshape(s[0], -1)
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
-            output = self.model.forward(model_in)
-        return output, target
+                output = self.model.forward(model_in)
+                return output, target
+            else:
+                s_t = model_in[..., :-1]
+                a_t = model_in[..., -1:]
+                # forward pass over the backbone encoder
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                output = self.model.forward(b_embb)
+                return output, target
 
     def sample(
         self,
@@ -436,6 +453,12 @@ class TransitionRewardModel(Model):
                 c_log_var = c_log_var.reshape(s[0], -1)
             b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
             model_in = torch.cat([c_embb, b_embb], dim=-1)
+        else:
+            s_t = model_in[..., :-1]
+            a_t = model_in[..., -1:]
+            # forward pass over the backbone encoder
+            model_in = self.stateaction_enc.joint_embb(s_t, a_t)
+
         preds, next_model_state = self.model.sample_1d(
             model_in, model_state, rng=rng, deterministic=deterministic
         )

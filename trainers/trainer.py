@@ -352,7 +352,7 @@ class Trainer(object):
         # environment information
         in_sz = config.context.out_dim+config.stateaction.out_dim \
                     if self.context_len is not None else \
-                        env.observation_space.shape[0]+env.action_space.shape[0]
+                        config.stateaction.out_dim
 
         cfg_dict = {
             # dynamics model configuration
