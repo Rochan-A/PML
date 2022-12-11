@@ -25,12 +25,25 @@ def create_agent(agent_cfg, model_env, config):
     mbrl.planning.complete_agent_cfg(model_env, agent_cfg)
     agent = hydra.utils.instantiate(agent_cfg)
 
+    # Get details of the eval function we want to use
+    eval_cfg = config.agent.eval
+
+    EVAL_FN = {
+        "default": model_env.evaluate_action_sequences,
+        "kl": model_env.evaluate_action_sequences_kl,
+        "greedy": model_env.evaluate_action_sequences_greedy,
+        "combine": model_env.evaluate_action_sequences_combine,
+    }
+
+    if eval_cfg.method == "combine":
+        raise NotImplementedError
+
     def trajectory_eval_fn(initial_state, action_sequences, initial_context=None):
-        return model_env.evaluate_action_sequences(
+        return EVAL_FN[eval_cfg.method](
             action_sequences,
             initial_state=initial_state,
             num_particles=config.agent.max_particles,
-            initial_context=initial_context
+            initial_context=initial_context,
         )
 
     agent.set_trajectory_eval_fn(trajectory_eval_fn)
@@ -115,7 +128,6 @@ class Tester(object):
             # load the model
             self.dynamics_model.load(args.load)
 
-            # Create custom gym-like environment to encapsulate the model TODO:
             self.model_env = ModelEnv(
                 env, self.dynamics_model, term_fn, reward_fn, generator=generator
             )
@@ -161,44 +173,52 @@ class Tester(object):
 
         all_rewards = []
         all_contexts = []
-        for trial in range(num_trials):
+
+        # len(env_fam) returns the number of MDPs to test over
+        # iterate over all possible MDP permutations
+        for MDP in range(len(env_fam)):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.
-            env, ctx_vals = env_fam.reset(train=False)
+            env, ctx_vals = env_fam.reset(idx=MDP)
             all_contexts.append(ctx_vals)
             print('trial: {}\t Context vector: {}'.format(trial, ctx_vals if ctx_vals is not None else '<fixed>'))
 
-            obs = env.reset()
-            if self.context_len:
-                rhc.reset()
-                rhc.append(obs, None)
+            rewards = []
+            for trial in range(num_trials):
 
-            self.agent.reset()
-
-            done = False
-            total_reward = 0.0
-            steps_trial = 0
-
-            while not done:
-
+                obs = env.reset()
                 if self.context_len:
-                    action = self.agent.act(obs, rhc.store, **{})
-                    rhc.append(obs, action)
-                else:
-                    action = self.agent.act(obs, **{})
-                next_obs, reward, done, _ = env.step(action)
+                    rhc.reset()
+                    rhc.append(obs, None)
 
-                obs = next_obs
-                total_reward += reward
-                steps_trial += 1
+                self.agent.reset()
 
-                if steps_trial == self.trial_length:
-                    break
-            all_rewards.append(total_reward)
+                done = False
+                total_reward = 0.0
+                steps_trial = 0
+
+                while not done:
+
+                    if self.context_len:
+                        action = self.agent.act(obs, rhc.store, **{})
+                        rhc.append(obs, action)
+                    else:
+                        action = self.agent.act(obs, **{})
+                    next_obs, reward, done, _ = env.step(action)
+
+                    obs = next_obs
+                    total_reward += reward
+                    steps_trial += 1
+
+                    if steps_trial == self.trial_length:
+                        break
+                rewards.append(total_reward)
+
+            all_rewards.append(rewards)
 
         self.plot_single(
-            all_rewards,
+            np.mean(np.array(all_rewards), axis=-1),
             join(PATH,'test_rewards.png'),
             xlabel="Trial",
             ylabel="Reward"

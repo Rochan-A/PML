@@ -77,6 +77,9 @@ class ContexualEnv:
             context = self.c_test.sample(idx)
         return self.env(**context), context
 
+    def __len__(self):
+        return len(self.c_test.permute_params)
+
 
 class DummyContextualEnv:
     """Wrapper over Gym.env to convert to Contextual Env.
@@ -91,6 +94,9 @@ class DummyContextualEnv:
 
     def reset(self, idx=True):
         return self.env, None
+
+    def __len__(self):
+        return 10
 
 
 if __name__ == "__main__":
