@@ -173,10 +173,9 @@ class ContextEncoder(nn.Module):
         z = e * std + mu
         return z
 
-    def dist(self,
-             x):
-        mu, log_var = self.forward(x)
-        return Normal(mu, log_var)
+    def dist(self, x):
+        _, mu, log_var = self.forward(x)
+        return Normal(mu, torch.exp(log_var))
 
     def save(self, save_dir):
         """Saves the model to the given directory."""

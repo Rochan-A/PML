@@ -76,6 +76,7 @@ class TransitionRewardModel(Model):
         model: Model,
         context_cfg: dict,
         stateaction_cfg: dict,
+        eval_cfg: dict,
         use_context = False,
         target_is_delta: bool = True,
         normalize: bool = False,
@@ -89,6 +90,8 @@ class TransitionRewardModel(Model):
         self.model = model  # GaussianMLP model
         self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
         self.stateaction_enc = StateActionEncoder(**stateaction_cfg).to(self.model.device)
+
+        self.mc_samples = eval_cfg.mc_samples
 
         # we only normalize the current state, action.
         # Context encoder is using difference so we cannot normalize it 
@@ -404,6 +407,7 @@ class TransitionRewardModel(Model):
         act: torch.Tensor,
         model_state: Dict[str, torch.Tensor],
         initial_context = None,
+        c_embb = None,
         deterministic: bool = False,
         rng: Optional[torch.Generator] = None,
     ) -> Tuple[
@@ -427,6 +431,9 @@ class TransitionRewardModel(Model):
         Returns:
             (tuple of two tensors): predicted next_observation (o_{t+1}) and rewards (r_{t+1}).
         """
+        if c_embb is not None:
+            return self.sample_c_embb(act, model_state, c_embb, deterministic, rng)
+
         obs = model_util.to_tensor(model_state["obs"]).to(self.device)
 
         if initial_context is not None:
@@ -469,6 +476,62 @@ class TransitionRewardModel(Model):
         rewards = preds[:, -1:] if self.learned_rewards else None
         next_model_state["obs"] = next_observs
         return next_observs, rewards, None, next_model_state
+
+    def sample_c_embb(
+        self,
+        act: torch.Tensor,
+        model_state: Dict[str, torch.Tensor],
+        c_embb,
+        deterministic: bool = False,
+        rng: Optional[torch.Generator] = None,
+    ) -> Tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[Dict[str, torch.Tensor]],
+    ]:
+        """Samples next observations and rewards from the underlying 1-D model.
+
+        This wrapper assumes that the underlying model's sample method returns a tuple
+        with just one tensor, which concatenates next_observation and reward.
+
+        Args:
+            act (tensor): the action at.
+            model_state (dict(str, tensor)): the model state st.
+            deterministic (bool): if ``True``, the model returns a deterministic
+                "sample" (e.g., the mean prediction). Defaults to ``False``.
+            rng (random number generator): a rng to use for sampling.
+
+        Returns:
+            (tuple of two tensors): predicted next_observation (o_{t+1}) and rewards (r_{t+1}).
+        """
+        obs = model_util.to_tensor(model_state["obs"]).to(self.device)
+
+        if len(obs.shape) == 2:
+            c_embb = np.repeat(c_embb, model_state["obs"].shape[0], axis=0).astype(np.float32)
+            c_embb = model_util.to_tensor(c_embb).float().to(self.device)
+
+        model_in = self._get_model_input(model_state["obs"], act)
+        if not hasattr(self.model, "sample_1d"):
+            raise RuntimeError(
+                "OneDTransitionRewardModel requires wrapped model to define method sample_1d"
+            )
+
+        s_t, a_t = model_in[..., :-1], model_in[..., -1:]
+        b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+        model_in = torch.cat([c_embb, b_embb], dim=-1)
+
+        preds, next_model_state = self.model.sample_1d(
+            model_in, model_state, rng=rng, deterministic=deterministic
+        )
+        next_observs = preds[:, :-1] if self.learned_rewards else preds
+        if self.target_is_delta:
+            tmp_ = next_observs + obs
+            next_observs = tmp_
+        rewards = preds[:, -1:] if self.learned_rewards else None
+        next_model_state["obs"] = next_observs
+        return next_observs, rewards, None, next_model_state
+
 
     def reset(
         self, obs: torch.Tensor, rng: Optional[torch.Generator] = None
@@ -517,11 +580,50 @@ class TransitionRewardModel(Model):
         if isinstance(self.model, Ensemble):
             self.model.set_propagation_method(propagation_method)
 
+    def _context_vec_delta_to_abs_state_action(self, context_vec, state_sz, action_sz):
+        states = [context_vec[:state_sz]]
+        actions = [context_vec[state_sz:state_sz+action_sz]]
+        for i in range(state_sz+action_sz-1, context_vec.shape[0]-1, state_sz+action_sz):
+            states.append(states[-1] + context_vec[i:i+state_sz])
+            actions.append(context_vec[i+state_sz:i+state_sz+action_sz])
+        return np.stack(states, axis=0), np.concatenate(actions, axis=-1)
+
+
+    def _pick_strongest_sample(self, z_samples, states, actions):
+        scores = np.zeros((self.mc_samples,))
+        with torch.no_grad():
+            # contruct a batch predictor
+            model_in = self._get_model_input(states, actions[:, None])
+            s_t, a_t = model_in[..., :-1].float(), model_in[..., -1:].float()
+            for mc_run in range(self.mc_samples):
+                # use the right embedder
+                c_embb = model_util.to_tensor(z_samples[mc_run, :]).float().to(self.device).repeat(s_t.shape[0], 1)
+                # forward pass over the backbone encoder
+                b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
+                model_in = torch.cat([c_embb, b_embb], dim=-1)
+                means, _ = self.model.forward(model_in, use_propagation=False)
+                means = torch.mean(means, dim=0).cpu().numpy()
+                target = states[1:] - states[:1]
+                scores[mc_run] = np.sum((target - means[:-1, :-1])**2)/((len(states) - 1)*states.shape[-1])
+        return np.argmin(scores)
+
+
+    def _maybe_strongest_mc_sample_context_enc(self, initial_context, state_sz, action_sz):
+        """Monte-Carlo sample <self.mc_sample>'s from P(C | <initial_context>)"""
+        states, actions = self._context_vec_delta_to_abs_state_action(initial_context, state_sz, action_sz)
+        initial_context = model_util.to_tensor(initial_context).unsqueeze(0).float().to(self.device)
+        with torch.no_grad():
+            dist = self.context_enc.dist(initial_context)
+        z_samples = dist.sample(sample_shape=(self.mc_samples,)).to(dtype=torch.float32, device=self.device)
+        strongest_idx = self._pick_strongest_sample(z_samples, states, actions)
+        return z_samples[strongest_idx, :].cpu().numpy()
+
 
 def create_model(
     cfg,
     context_cfg,
     backbone_cfg,
+    eval_cfg,
     use_context,
     model_dir: Optional[Union[str, pathlib.Path]] = None,
 ):
@@ -569,6 +671,7 @@ def create_model(
         model,
         context_cfg,
         backbone_cfg,
+        eval_cfg,
         use_context=use_context,
         target_is_delta=cfg.algorithm.target_is_delta,
         normalize=cfg.algorithm.normalize,

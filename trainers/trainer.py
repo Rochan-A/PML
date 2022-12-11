@@ -1,10 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import omegaconf
+import omegaconf, warnings
 from pprint import pprint
 from os.path import join
-
+from copy import deepcopy
 import mbrl.models as models
 
 from models.transitionreward import create_model
@@ -52,10 +52,10 @@ class RollingHistoryContext:
 
         k = np.concatenate([n_state, action], axis=0)
         if self.store is None:
-            self.store = np.repeat(k, self.K)
+            self.store = np.tile(deepcopy(k), self.K)
         else:
             self.store = np.roll(self.store, -k.shape[0])
-            self.store[-k.shape[0]:] = k
+            self.store[-k.shape[0]:] = deepcopy(k)
 
     def reset(self):
         self.store = None
@@ -207,12 +207,23 @@ class TrajectoryOptimizerAgent(Agent):
         return plan
 
 
+
 def create_agent(agent_cfg, model_env, config):
     mbrl.planning.complete_agent_cfg(model_env, agent_cfg)
     agent = hydra.utils.instantiate(agent_cfg)
 
+    # Get details of the eval function we want to use
+    eval_cfg = config.agent.eval
+
+    EVAL_FN = {
+        'default': model_env.evaluate_action_sequences,
+        'kl': model_env.evaluate_action_sequences_kl,
+        'greedy': model_env.evaluate_action_sequences_greedy,
+        'combine': model_env.evaluate_action_sequences_combine
+    }
+
     def trajectory_eval_fn(initial_state, action_sequences, initial_context=None):
-        return model_env.evaluate_action_sequences(
+        return EVAL_FN[eval_cfg.method](
             action_sequences,
             initial_state=initial_state,
             num_particles=config.agent.max_particles,
@@ -287,7 +298,7 @@ def rollout_agent_trajectories(
         total_reward = 0.0
         while not done:
             if context_len:
-                action = agent.act(obs, rhc.store, **agent_kwargs)
+                action = agent.act(obs, deepcopy(rhc.store), **agent_kwargs)
                 rhc.append(obs, action)
             else:
                 action = agent.act(obs, **agent_kwargs)
@@ -296,7 +307,7 @@ def rollout_agent_trajectories(
 
             if replay_buffer is not None:
                 if context_len:
-                    replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
+                    replay_buffer.add(obs, action, next_obs, reward, done, deepcopy(rhc.store))
                 else:
                     replay_buffer.add(obs, action, next_obs, reward, done)
 
@@ -402,7 +413,7 @@ class Trainer(object):
 
         # Create a dynamics model for this environment
         self.dynamics_model = create_model(
-            self.cfg, self.context_cfg, self.stateaction_cfg, False if self.context_len is None else True
+            self.cfg, self.context_cfg, self.stateaction_cfg, config.agent.eval, False if self.context_len is None else True
         )
 
         # Create custom gym-like environment to encapsulate the model
@@ -492,11 +503,13 @@ class Trainer(object):
 
         # Main PETS loop
         all_rewards = [0]
+        all_contexts = [None]
         for trial in range(self.num_trials):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.
             env, ctx_vals = env_fam.reset(train=True)
+            all_contexts.append(ctx_vals)
             print('trial: {}\t Context vector: {}'.format(trial, ctx_vals if ctx_vals is not None else '<fixed>'))
 
             obs = env.reset()
@@ -536,13 +549,13 @@ class Trainer(object):
 
                 # --- Doing env step using the agent and adding to model dataset ---
                 if self.context_len:
-                    action = self.agent.act(obs, rhc.store, **{})
+                    action = self.agent.act(obs, deepcopy(rhc.store), **{})
                     rhc.append(obs, action)
                 else:
                     action = self.agent.act(obs, **{})
                 next_obs, reward, done, _ = env.step(action)
                 if self.context_len:
-                    self.replay_buffer.add(obs, action, next_obs, reward, done, rhc.store)
+                    self.replay_buffer.add(obs, action, next_obs, reward, done, deepcopy(rhc.store))
                 else:
                     self.replay_buffer.add(obs, action, next_obs, reward, done)
 
@@ -575,14 +588,16 @@ class Trainer(object):
             return {
                 'train_losses': train_losses,
                 'val_scores': val_scores,
-                'rewards': all_rewards
+                'rewards': all_rewards,
+                'all_contexts': all_contexts
             }
         else:
             return {
                 'train_losses': train_losses,
                 'val_scores': val_scores,
                 'rewards': all_rewards,
-                'model': self.model_env
+                'model': self.model_env,
+                'all_contexts': all_contexts
             }
 
     def plot(self, data, path, xlabels, ylabels):

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Tuple
 import gym
 import numpy as np
 import torch
+from torch.distributions import kl_divergence, Normal
 
 import mbrl.types
 
@@ -88,6 +89,7 @@ class ModelEnv:
         actions: mbrl.types.TensorType,
         model_state: Dict[str, torch.Tensor],
         context = None,
+        c_embb=None,
         sample: bool = False,
     ) -> Tuple[mbrl.types.TensorType, mbrl.types.TensorType, np.ndarray, Dict]:
         """Steps the model environment with the given batch of actions.
@@ -120,6 +122,7 @@ class ModelEnv:
                 actions,
                 model_state,
                 context,
+                c_embb=c_embb,
                 deterministic=not sample,
                 rng=self._rng,
             )
@@ -192,7 +195,200 @@ class ModelEnv:
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)
 
+    def evaluate_action_sequences_kl(
+        self,
+        action_sequences: torch.Tensor,
+        initial_state: np.ndarray,
+        num_particles: int,
+        initial_context=None
+    ) -> torch.Tensor:
+        """Evaluates a batch of action sequences on the model.
 
+        NOTE: Only uses KL divergence to perform SAFE actions! Adds a penalty
+        to keep future state-action sequence context embedding close to current
+        previous context embedding
+
+        Args:
+            action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
+                be ``B x H x A``, where ``B``, ``H``, and ``A`` represent batch size, horizon,
+                and action dimension, respectively.
+            initial_state (np.ndarray): the initial state for the trajectories.
+            num_particles (int): number of times each action sequence is replicated. The final
+                value of the sequence will be the average over its particles values.
+            initial_context (np.ndarray, Optional): context for the rollout
+
+        Returns:
+            (torch.Tensor): the accumulated reward for each action sequence, averaged over its
+            particles.
+        """
+        assert (
+            len(action_sequences.shape) == 3
+        )  # population_size, horizon, action_shape
+        population_size, horizon, action_dim = action_sequences.shape
+        initial_obs_batch = np.tile(
+            initial_state, (num_particles * population_size, 1)
+        ).astype(np.float32)
+        model_state = self.reset(initial_obs_batch, return_as_np=False)
+        batch_size = initial_obs_batch.shape[0]
+        total_rewards = torch.zeros(batch_size, 1).to(self.device)
+        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
+        state_dim = model_state["obs"].shape[-1]
+
+        # stack trajectory rollouts here
+        context_vec = torch.zeros((batch_size, self.dynamics_model.context_enc.in_dim), dtype=torch.float32).to(self.device)
+
+        for time_step in range(horizon):
+            actions_for_step = action_sequences[:, time_step, :]
+            action_batch = torch.repeat_interleave(
+                actions_for_step, num_particles, dim=0
+            )
+
+            context_vec[:, time_step:time_step+state_dim] = model_state["obs"]
+            context_vec[:, time_step+state_dim::time_step+state_dim+1] = action_batch
+
+            _, rewards, dones, model_state = self.step(
+                action_batch, model_state, initial_context, sample=True
+            )
+
+            rewards[terminated] = 0
+            terminated |= dones.reshape(-1, 1)
+            total_rewards += rewards
+
+        # get the context for the new trajectories
+        with torch.no_grad():
+            _, mu, log_var = self.dynamics_model.context_enc.forward(context_vec)
+            new_dist = Normal(mu, torch.exp(log_var))
+            
+            if not isinstance(initial_context, torch.Tensor):
+                initial_context = torch.tensor(initial_context).float().to(self.device)
+
+            _, mu, log_var = self.dynamics_model.context_enc.forward(initial_context)
+            old_dist = Normal(mu, torch.exp(log_var))
+
+        total_rewards *= kl_divergence(old_dist, new_dist).mean(dim=1).reshape(-1, 1)
+
+        total_rewards = total_rewards.reshape(-1, num_particles)
+        return total_rewards.mean(dim=1)
+
+    def evaluate_action_sequences_greedy(
+        self,
+        action_sequences: torch.Tensor,
+        initial_state: np.ndarray,
+        num_particles: int,
+        initial_context=None
+    ) -> torch.Tensor:
+        """Evaluates a batch of action sequences on the model.
+
+        NOTE: Uses both prediction rewards & KL divergence to trade-off myopic
+        & non-myopic actions! Adds both terms.
+
+        Args:
+            action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
+                be ``B x H x A``, where ``B``, ``H``, and ``A`` represent batch size, horizon,
+                and action dimension, respectively.
+            initial_state (np.ndarray): the initial state for the trajectories.
+            num_particles (int): number of times each action sequence is replicated. The final
+                value of the sequence will be the average over its particles values.
+            initial_context (np.ndarray, Optional): context for the rollout
+
+        Returns:
+            (torch.Tensor): the accumulated reward for each action sequence, averaged over its
+            particles.
+        """
+        assert (
+            len(action_sequences.shape) == 3
+        )  # population_size, horizon, action_shape
+        population_size, horizon, action_dim = action_sequences.shape
+        initial_obs_batch = np.tile(
+            initial_state, (num_particles * population_size, 1)
+        ).astype(np.float32)
+        model_state = self.reset(initial_obs_batch, return_as_np=False)
+        batch_size = initial_obs_batch.shape[0]
+        total_rewards = torch.zeros(batch_size, 1).to(self.device)
+
+        # MC sample to get {z'}_k ~ p(z | <initial_context>), and pick strongest
+        # sample
+        z_sample = self.dynamics_model._maybe_strongest_mc_sample_context_enc(
+            initial_context,
+            model_state["obs"].shape[-1],
+            action_dim
+        )
+
+        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
+        for time_step in range(horizon):
+            actions_for_step = action_sequences[:, time_step, :]
+            action_batch = torch.repeat_interleave(
+                actions_for_step, num_particles, dim=0
+            )
+            _, rewards, dones, model_state = self.step(
+                action_batch, model_state, None, z_sample, sample=True
+            )
+            rewards[terminated] = 0
+            terminated |= dones.reshape(-1, 1)
+            total_rewards += rewards
+
+        total_rewards = total_rewards.reshape(-1, num_particles)
+        return total_rewards.mean(dim=1)
+
+    def evaluate_action_sequences_combine(
+        self,
+        action_sequences: torch.Tensor,
+        initial_state: np.ndarray,
+        num_particles: int,
+        initial_context=None
+    ) -> torch.Tensor:
+        """Evaluates a batch of action sequences on the model.
+
+        NOTE: Uses both prediction rewards & KL divergence to trade-off myopic
+        & non-myopic actions! Adds both terms.
+
+        Args:
+            action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
+                be ``B x H x A``, where ``B``, ``H``, and ``A`` represent batch size, horizon,
+                and action dimension, respectively.
+            initial_state (np.ndarray): the initial state for the trajectories.
+            num_particles (int): number of times each action sequence is replicated. The final
+                value of the sequence will be the average over its particles values.
+            initial_context (np.ndarray, Optional): context for the rollout
+
+        Returns:
+            (torch.Tensor): the accumulated reward for each action sequence, averaged over its
+            particles.
+        """
+        assert (
+            len(action_sequences.shape) == 3
+        )  # population_size, horizon, action_shape
+        population_size, horizon, action_dim = action_sequences.shape
+        initial_obs_batch = np.tile(
+            initial_state, (num_particles * population_size, 1)
+        ).astype(np.float32)
+        model_state = self.reset(initial_obs_batch, return_as_np=False)
+        batch_size = initial_obs_batch.shape[0]
+        total_rewards = torch.zeros(batch_size, 1).to(self.device)
+
+        # MC sample to get {z'}_k ~ p(z | <initial_context>), and pick strongest
+        # sample
+        z_sample = self.dynamics_model._maybe_strongest_mc_sample_context_enc(
+            initial_context,
+            model_state["obs"].shape[-1],
+            action_dim
+        )
+
+        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
+        for time_step in range(horizon):
+            actions_for_step = action_sequences[:, time_step, :]
+            action_batch = torch.repeat_interleave(
+                actions_for_step, num_particles, dim=0
+            )
+            _, rewards, dones, model_state = self.step(
+                action_batch, model_state, None, z_sample, sample=True
+            )
+            rewards[terminated] = 0
+            terminated |= dones.reshape(-1, 1)
+            total_rewards += rewards
+
+        total_rewards = total_rewards.reshape(-1, num_particles)
+        return total_rewards.mean(dim=1)
 
 if __name__=='__main__':
     import sys

@@ -6,6 +6,10 @@ import numpy as np
 import argparse, datetime
 from pprint import pprint
 
+import bz2
+import pickle
+import _pickle as cPickle
+
 import torch
 
 from tensorboardX import SummaryWriter
@@ -16,6 +20,21 @@ import mbrl.env.termination_fns as termination_fns
 
 from trainers import Trainer, Tester
 from envs import ContexualEnv, DummyContextualEnv, configure_reward_fn, configure_term_fn
+
+
+def without_keys(d, *keys):
+     return dict(filter(lambda key_value: key_value[0] not in keys, d.items()))
+
+
+def compress_pickle(fname, data):
+    with bz2.BZ2File(fname, 'wb') as f:
+        cPickle.dump(data, f)
+
+
+def decompress_pickle(file):
+    data = bz2.BZ2File(file, 'rb')
+    data = cPickle.load(data)
+    return data
 
 
 def make_dirs(directory):
@@ -111,6 +130,8 @@ def train(args, config, PATH):
     algo = Trainer(**trainer_cfg)
     data = algo.run(env_fam, env, PATH)
 
+    compress_pickle(join(PATH, 'train_data.pkl'), without_keys(data, 'model'))
+
     return data
 
 
@@ -157,7 +178,9 @@ def test(args, config, model=None):
     pprint(tester_cfg)
 
     tester = Tester(**tester_cfg)
-    data = tester.run(env_fam, env, 10, PATH)
+    data = tester.run(env_fam, env, 30, PATH)
+
+    compress_pickle(join(PATH, 'test_data.pkl'), data)
 
 
 if __name__ == "__main__":

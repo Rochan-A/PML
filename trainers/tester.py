@@ -159,12 +159,14 @@ class Tester(object):
                 action_sz=env.action_space.shape[0]
             )
 
-        all_rewards = [0]
+        all_rewards = []
+        all_contexts = []
         for trial in range(num_trials):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.
             env, ctx_vals = env_fam.reset(train=False)
+            all_contexts.append(ctx_vals)
             print('trial: {}\t Context vector: {}'.format(trial, ctx_vals if ctx_vals is not None else '<fixed>'))
 
             obs = env.reset()
@@ -202,7 +204,8 @@ class Tester(object):
             ylabel="Reward"
         )
         return {
-                'rewards': all_rewards
+                'rewards': all_rewards,
+                'all_contexts': all_contexts
             }
 
 
