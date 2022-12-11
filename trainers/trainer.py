@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import omegaconf, warnings
+import omegaconf
 from pprint import pprint
 from os.path import join
 from copy import deepcopy
@@ -26,16 +26,16 @@ import mbrl.util.math
 
 from mbrl.planning.core import Agent
 from mbrl.planning.trajectory_opt import TrajectoryOptimizer
-from .replay_buffer import get_basic_buffer_iterators, create_replay_buffer
+from .replay_buffer import get_basic_buffer_iterators, create_replay_buffer, ReplayBuffer
 
 
 class RollingHistoryContext:
     def __init__(self, K, state_sz, action_sz) -> None:
         self.K = K
-        
+
         self.state_sz = state_sz
         self.action_sz = action_sz
-        self.default_sz = (state_sz+action_sz)*K
+        self.default_sz = (state_sz + action_sz) * K
         self.store = None
         self.prev_st = None
 
@@ -55,7 +55,7 @@ class RollingHistoryContext:
             self.store = np.tile(deepcopy(k), self.K)
         else:
             self.store = np.roll(self.store, -k.shape[0])
-            self.store[-k.shape[0]:] = deepcopy(k)
+            self.store[-k.shape[0] :] = deepcopy(k)
 
     def reset(self):
         self.store = None
@@ -143,7 +143,11 @@ class TrajectoryOptimizerAgent(Agent):
         self.optimizer.reset()
 
     def act(
-        self, obs: np.ndarray, context=None, optimizer_callback: Optional[Callable] = None, **_kwargs
+        self,
+        obs: np.ndarray,
+        context=None,
+        optimizer_callback: Optional[Callable] = None,
+        **_kwargs,
     ) -> np.ndarray:
         """Issues an action given an observation.
 
@@ -207,7 +211,6 @@ class TrajectoryOptimizerAgent(Agent):
         return plan
 
 
-
 def create_agent(agent_cfg, model_env, config):
     mbrl.planning.complete_agent_cfg(model_env, agent_cfg)
     agent = hydra.utils.instantiate(agent_cfg)
@@ -216,18 +219,21 @@ def create_agent(agent_cfg, model_env, config):
     eval_cfg = config.agent.eval
 
     EVAL_FN = {
-        'default': model_env.evaluate_action_sequences,
-        'kl': model_env.evaluate_action_sequences_kl,
-        'greedy': model_env.evaluate_action_sequences_greedy,
-        'combine': model_env.evaluate_action_sequences_combine
+        "default": model_env.evaluate_action_sequences,
+        "kl": model_env.evaluate_action_sequences_kl,
+        "greedy": model_env.evaluate_action_sequences_greedy,
+        "combine": model_env.evaluate_action_sequences_combine,
     }
+
+    if eval_cfg.method == "combine":
+        raise NotImplementedError
 
     def trajectory_eval_fn(initial_state, action_sequences, initial_context=None):
         return EVAL_FN[eval_cfg.method](
             action_sequences,
             initial_state=initial_state,
             num_particles=config.agent.max_particles,
-            initial_context=initial_context
+            initial_context=initial_context,
         )
 
     agent.set_trajectory_eval_fn(trajectory_eval_fn)
@@ -239,9 +245,9 @@ def rollout_agent_trajectories(
     steps_or_trials_to_collect: int,
     agent: mbrl.planning.Agent,
     agent_kwargs: Dict,
-    context_len=None,
+    context_len: int = None,
     trial_length: Optional[int] = None,
-    replay_buffer = None,
+    replay_buffer: ReplayBuffer = None,
     collect_full_trajectories: bool = False,
 ) -> List[float]:
     """Rollout agent trajectories in the given environment.
@@ -263,7 +269,7 @@ def rollout_agent_trajectories(
         collect_full_trajectories (bool): if ``True``, indicates that replay buffers should
             collect full trajectories. This only affects the split between training and
             validation buffers. If ``collect_trajectories=True``, the split is done over
-            trials (full trials in each dataset); otherwise, it's done across steps.
+            trials.reset(train=True) (full trials in each dataset); otherwise, it's done across steps.
 
     Returns:
         (list(float)): Total rewards obtained at each complete trial.
@@ -280,14 +286,16 @@ def rollout_agent_trajectories(
             "corrupted trajectory data."
         )
 
-    env, _ = env_fam.reset(train=True)
+    env, _ = env_fam.reset()
     step = 0
     trial = 0
     total_rewards: List[float] = []
     if context_len:
-        rhc = RollingHistoryContext(context_len, env.observation_space.shape[0], env.action_space.shape[0])
+        rhc = RollingHistoryContext(
+            context_len, env.observation_space.shape[0], env.action_space.shape[0]
+        )
     while True:
-        env, _ = env_fam.reset(train=True)
+        env, _ = env_fam.reset()
 
         obs = env.reset()
         if context_len:
@@ -307,7 +315,9 @@ def rollout_agent_trajectories(
 
             if replay_buffer is not None:
                 if context_len:
-                    replay_buffer.add(obs, action, next_obs, reward, done, deepcopy(rhc.store))
+                    replay_buffer.add(
+                        obs, action, next_obs, reward, done, deepcopy(rhc.store)
+                    )
                 else:
                     replay_buffer.add(obs, action, next_obs, reward, done)
 
@@ -343,13 +353,15 @@ class Trainer(object):
         writer,
         no_test_flag,
         rng,
-        save_path
+        save_path,
     ):
 
         self.trial_length = config.trail_length
         self.num_trials = config.num_trials
         self.ensemble_size = config.transitionreward.ensemble_size
-        self.context_len = None if config.context.no_context else config.context.history_size
+        self.context_len = (
+            None if config.context.no_context else config.context.history_size
+        )
         self.writer = writer
         self.no_test_flag = no_test_flag
         self.epochs_per_step = config.dynamics.epochs_per_step
@@ -361,9 +373,11 @@ class Trainer(object):
         # Everything with "???" indicates an option with a missing value.
         # Our utility functions will fill in these details using the
         # environment information
-        in_sz = config.context.out_dim+config.stateaction.out_dim \
-                    if self.context_len is not None else \
-                        config.stateaction.out_dim
+        in_sz = (
+            config.context.out_dim + config.stateaction.out_dim
+            if self.context_len is not None
+            else config.stateaction.out_dim
+        )
 
         cfg_dict = {
             # dynamics model configuration
@@ -390,7 +404,7 @@ class Trainer(object):
                 "learned_rewards": True if reward_fn is None else False,
                 "target_is_delta": True,
                 "normalize": config.normalize_flag,
-                "dataset_size": config.replay_buffer_sz
+                "dataset_size": config.replay_buffer_sz,
             },
             # these are experiment specific options
             "overrides": {
@@ -399,7 +413,7 @@ class Trainer(object):
                 "validation_ratio": config.dynamics.validation_ratio,
             },
         }
-        print('Model Env cfg')
+        print("Model Env cfg")
         pprint(cfg_dict)
         self.cfg = omegaconf.OmegaConf.create(cfg_dict)
 
@@ -413,7 +427,11 @@ class Trainer(object):
 
         # Create a dynamics model for this environment
         self.dynamics_model = create_model(
-            self.cfg, self.context_cfg, self.stateaction_cfg, config.agent.eval, False if self.context_len is None else True
+            self.cfg,
+            self.context_cfg,
+            self.stateaction_cfg,
+            config.agent.eval,
+            False if self.context_len is None else True,
         )
 
         # Create custom gym-like environment to encapsulate the model
@@ -444,27 +462,27 @@ class Trainer(object):
         print("# samples stored", self.replay_buffer.num_stored)
 
         agent_cfg = {
-                # this class evaluates many trajectories and picks the best one
-                "_target_": "trainers.TrajectoryOptimizerAgent",
-                "planning_horizon": config.agent.horizon,
-                "replan_freq": config.agent.replan_freq,
-                "verbose": False,
-                "action_lb": [-1.],
-                "action_ub": [1.],
-                # this is the optimizer to generate and choose a trajectory
-                "optimizer_cfg": {
-                    "_target_": "mbrl.planning.CEMOptimizer",
-                    "num_iterations": config.agent.num_iters,
-                    "elite_ratio": config.agent.elite_ratio,
-                    "population_size": config.agent.horizon,
-                    "alpha": config.agent.alpha,
-                    "device": str(config["device"]),
-                    "lower_bound": "???",
-                    "upper_bound": "???",
-                    "return_mean_elites": True,
-                },
+            # this class evaluates many trajectories and picks the best one
+            "_target_": "trainers.TrajectoryOptimizerAgent",
+            "planning_horizon": config.agent.horizon,
+            "replan_freq": config.agent.replan_freq,
+            "verbose": False,
+            "action_lb": [-1.0],
+            "action_ub": [1.0],
+            # this is the optimizer to generate and choose a trajectory
+            "optimizer_cfg": {
+                "_target_": "mbrl.planning.CEMOptimizer",
+                "num_iterations": config.agent.num_iters,
+                "elite_ratio": config.agent.elite_ratio,
+                "population_size": config.agent.horizon,
+                "alpha": config.agent.alpha,
+                "device": str(config["device"]),
+                "lower_bound": "???",
+                "upper_bound": "???",
+                "return_mean_elites": True,
+            },
         }
-        print('Agent Optimizer cfg')
+        print("Agent Optimizer cfg")
         pprint(agent_cfg)
         agent_cfg = omegaconf.OmegaConf.create(agent_cfg)
 
@@ -478,9 +496,11 @@ class Trainer(object):
 
         # Create a trainer for the model
         self.model_trainer = models.ModelTrainer(
-            self.dynamics_model, optim_lr=config.dynamics.learning_rate, weight_decay=5e-5, logger=logger
+            self.dynamics_model,
+            optim_lr=config.dynamics.learning_rate,
+            weight_decay=5e-5,
+            logger=logger,
         )
-
 
     def run(self, env_fam, env, PATH):
         train_losses = []
@@ -491,14 +511,14 @@ class Trainer(object):
             val_scores.append(
                 val_score.mean().item()
             )  # this returns val score per ensemble model
-            self.writer.add_scalar('loss/train', tr_loss, _epoch)
-            self.writer.add_scalar('score/val_score', val_score.mean().item(), _epoch)
+            self.writer.add_scalar("loss/train", tr_loss, _epoch)
+            self.writer.add_scalar("score/val_score", val_score.mean().item(), _epoch)
 
         if self.context_len:
             rhc = RollingHistoryContext(
                 K=self.context_len,
                 state_sz=env.observation_space.shape[0],
-                action_sz=env.action_space.shape[0]
+                action_sz=env.action_space.shape[0],
             )
 
         # Main PETS loop
@@ -508,9 +528,13 @@ class Trainer(object):
 
             # Sample CMDP from distribution. If --mdp flag, then it returns the
             # same MDP.
-            env, ctx_vals = env_fam.reset(train=True)
+            env, ctx_vals = env_fam.reset()
             all_contexts.append(ctx_vals)
-            print('trial: {}\t Context vector: {}'.format(trial, ctx_vals if ctx_vals is not None else '<fixed>'))
+            print(
+                "trial: {}\t Context vector: {}".format(
+                    trial, ctx_vals if ctx_vals is not None else "<fixed>"
+                )
+            )
 
             obs = env.reset()
             if self.context_len:
@@ -536,7 +560,7 @@ class Trainer(object):
                         val_ratio=self.cfg.overrides.validation_ratio,
                         ensemble_size=self.ensemble_size,
                         shuffle_each_epoch=True,
-                        bootstrap_permutes=False, # build bootstrap dataset using sampling with replacement
+                        bootstrap_permutes=False,  # build bootstrap dataset using sampling with replacement
                     )
 
                     self.model_trainer.train(
@@ -555,7 +579,9 @@ class Trainer(object):
                     action = self.agent.act(obs, **{})
                 next_obs, reward, done, _ = env.step(action)
                 if self.context_len:
-                    self.replay_buffer.add(obs, action, next_obs, reward, done, deepcopy(rhc.store))
+                    self.replay_buffer.add(
+                        obs, action, next_obs, reward, done, deepcopy(rhc.store)
+                    )
                 else:
                     self.replay_buffer.add(obs, action, next_obs, reward, done)
 
@@ -565,7 +591,7 @@ class Trainer(object):
 
                 if steps_trial == self.trial_length:
                     break
-            self.writer.add_scalar('reward/train', total_reward, trial)
+            self.writer.add_scalar("reward/train", total_reward, trial)
             all_rewards.append(total_reward)
 
         self.dynamics_model.save(PATH)
@@ -573,31 +599,28 @@ class Trainer(object):
         # Make plots
         self.plot(
             [train_losses, val_scores],
-            join(PATH, 'scores_losses.png'),
+            join(PATH, "scores_losses.png"),
             ["Epoch", "Epoch"],
-            ["Training loss (avg. NLL)", "Validation score (avg. MSE)"]
+            ["Training loss (avg. NLL)", "Validation score (avg. MSE)"],
         )
         self.plot_single(
-            all_rewards,
-            join(PATH,'rewards.png'),
-            xlabel="Trial",
-            ylabel="Reward"
+            all_rewards, join(PATH, "rewards.png"), xlabel="Trial", ylabel="Reward"
         )
 
         if self.no_test_flag:
             return {
-                'train_losses': train_losses,
-                'val_scores': val_scores,
-                'rewards': all_rewards,
-                'all_contexts': all_contexts
+                "train_losses": train_losses,
+                "val_scores": val_scores,
+                "rewards": all_rewards,
+                "all_contexts": all_contexts,
             }
         else:
             return {
-                'train_losses': train_losses,
-                'val_scores': val_scores,
-                'rewards': all_rewards,
-                'model': self.model_env,
-                'all_contexts': all_contexts
+                "train_losses": train_losses,
+                "val_scores": val_scores,
+                "rewards": all_rewards,
+                "model": self.model_env,
+                "all_contexts": all_contexts,
             }
 
     def plot(self, data, path, xlabels, ylabels):
@@ -607,7 +630,6 @@ class Trainer(object):
             ax[i].set_xlabel(xlabel)
             ax[i].set_ylabel(ylabel)
         plt.savefig(path)
-
 
     def plot_single(self, data, path, xlabel, ylabel):
         plt.figure(dpi=200)

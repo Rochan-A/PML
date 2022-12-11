@@ -1,7 +1,8 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+"""
+Parts of this code was borrowed from:
+https://github.com/facebookresearch/mbrl-lib
+"""
+
 import pathlib
 from typing import Any, Dict, Optional, Sequence, Tuple, Union, cast
 
@@ -19,25 +20,31 @@ from .base import StateActionEncoder, ContextEncoder
 
 def ll_gaussian(y, mu, log_var):
     sigma = torch.exp(0.5 * log_var)
-    return -0.5 * torch.log(2 * np.pi * sigma**2) - (1 / (2 * sigma**2))* (y-mu)**2
+    return (
+        -0.5 * torch.log(2 * np.pi * sigma**2)
+        - (1 / (2 * sigma**2)) * (y - mu) ** 2
+    )
+
 
 def elbo(y_pred, mu, log_var):
     # prior probability of y_pred
-    log_prior = ll_gaussian(y_pred, 0, torch.log(torch.tensor(1.)))
-    
+    log_prior = ll_gaussian(y_pred, 0, torch.log(torch.tensor(1.0)))
+
     # variational probability of y_pred
     log_p_q = ll_gaussian(y_pred, mu, log_var)
-    
+
     # by taking the mean we approximate the expectation
     return (log_prior - log_p_q).mean()
+
 
 def det_loss(y_pred, mu, log_var):
     # Neg of elbo without reconstruction loss term
     return -elbo(y_pred, mu, log_var)
 
+
 def det_loss_kl(mu, log_var):
     # KL( p(z) || q(z) )
-    kl_divergence = (-0.5 * torch.sum(1 + log_var - mu**2 - log_var.exp()))
+    kl_divergence = -0.5 * torch.sum(1 + log_var - mu**2 - log_var.exp())
     return kl_divergence.sum()
 
 
@@ -49,26 +56,6 @@ class TransitionRewardModel(Model):
 
     To use with :class:mbrl.models.ModelEnv`, the wrapped model must define methods
     ``reset_1d`` and ``sample_1d``.
-
-    Args:
-        model (:class:`mbrl.model.Model`): the model to wrap.
-        target_is_delta (bool): if ``True``, the predicted observations will represent
-            the difference respect to the input observations.
-            That is, ignoring rewards, pred_obs_{t + 1} = obs_t + model([obs_t, act_t]).
-            Defaults to ``True``. Can be deactivated per dimension using ``no_delta_list``.
-        normalize (bool): if true, the wrapper will create a normalizer for model inputs,
-            which will be used every time the model is called using the methods in this
-            class. Assumes the given base model has an attributed ``in_size``.
-            To update the normalizer statistics, the user needs to call
-            :meth:`update_normalizer` before using the model. Defaults to ``False``.
-        normalize_double_precision (bool): if ``True``, the normalizer will work with
-            double precision.
-        learned_rewards (bool): if ``True``, the wrapper considers the last output of the model
-            to correspond to rewards predictions, and will use it to construct training
-            targets for the model and when returning model predictions. Defaults to ``True``.
-        num_elites (int, optional): if provided, only the best ``num_elites`` models according
-            to validation score are used when calling :meth:`predict`. Defaults to
-            ``None`` which means that all models will always be included in the elite set.
     """
 
     def __init__(
@@ -77,7 +64,7 @@ class TransitionRewardModel(Model):
         context_cfg: dict,
         stateaction_cfg: dict,
         eval_cfg: dict,
-        use_context = False,
+        use_context=False,
         target_is_delta: bool = True,
         normalize: bool = False,
         normalize_double_precision: bool = False,
@@ -87,14 +74,19 @@ class TransitionRewardModel(Model):
         super().__init__(model.device)
 
         self.use_context = use_context
-        self.model = model  # GaussianMLP model
-        self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
-        self.stateaction_enc = StateActionEncoder(**stateaction_cfg).to(self.model.device)
 
-        self.mc_samples = eval_cfg.mc_samples
+        # GaussianMLP model
+        self.model = model
+        self.context_enc = ContextEncoder(**context_cfg).to(self.model.device)
+        self.stateaction_enc = StateActionEncoder(**stateaction_cfg).to(
+            self.model.device
+        )
+
+        # configs for evaluating action sequences
+        self.eval_cfg = eval_cfg
 
         # we only normalize the current state, action.
-        # Context encoder is using difference so we cannot normalize it 
+        # Context encoder is using state delta so we do not normalize it
         self.input_normalizer: Optional[mbrl.util.math.Normalizer] = None
         if normalize:
             in_size = self.stateaction_enc.in_dim
@@ -112,12 +104,7 @@ class TransitionRewardModel(Model):
         if not num_elites and isinstance(self.model, Ensemble):
             self.num_elites = self.model.num_members
 
-    def _get_model_input(
-        self,
-        obs,
-        action,
-        context=None
-    ) -> torch.Tensor:
+    def _get_model_input(self, obs, action, context=None) -> torch.Tensor:
         obs = model_util.to_tensor(obs).to(self.device)
         action = model_util.to_tensor(action).to(self.device)
         model_in = torch.cat([obs, action], dim=obs.ndim - 1)
@@ -197,12 +184,15 @@ class TransitionRewardModel(Model):
         model_in, target = self._process_batch(batch)
 
         if self.use_context:
-            context = model_in[..., :self.context_enc.in_dim]
-            s_t = model_in[..., self.context_enc.in_dim:-1]
+            # Split to context, state, action
+            context = model_in[..., : self.context_enc.in_dim]
+            s_t = model_in[..., self.context_enc.in_dim : -1]
             a_t = model_in[..., -1:]
             s = context.shape
 
-            c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
+            c_embb, c_mu, c_log_var = self.context_enc.forward(
+                context.reshape(-1, context.shape[-1])
+            )
             if len(s) == 3:
                 c_embb = c_embb.reshape(s[0], s[1], -1)
                 c_mu = c_mu.reshape(s[0], s[1], -1)
@@ -217,7 +207,7 @@ class TransitionRewardModel(Model):
             # https://arxiv.org/abs/2002.03072
             loss += det_loss_kl(c_mu, c_log_var)
 
-            # forward pass over the backbone encoder
+            # forward pass over the state-action encoder & dynamics model
             b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
             model_in = torch.cat([c_embb, b_embb], dim=-1)
             loss += self.model.loss(model_in, target=target)
@@ -255,14 +245,19 @@ class TransitionRewardModel(Model):
             self.context_enc.train()
             self.stateaction_enc.train()
 
-            # Forward pass over the context encoder
-            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            # Split to context, state, action
+            context = model_in[..., : self.context_enc.in_dim]
+            s_t = model_in[..., self.context_enc.in_dim : -1]
+            a_t = model_in[..., -1:]
             s = context.shape
+            context = context.reshape(-1, context.shape[-1])
 
             # Monte Carlo sample from p(c), and avg loss -- context encoder
             loss_and_maybe_meta = []
-            for m in range(2):
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
+            for _ in range(self.eval_cfg.mc_update):
+                c_embb, c_mu, c_log_var = self.context_enc.forward(
+                    context.clone()
+                )
                 if len(s) == 3:
                     c_embb = c_embb.reshape(s[0], s[1], -1)
                     c_mu = c_mu.reshape(s[0], s[1], -1)
@@ -277,18 +272,19 @@ class TransitionRewardModel(Model):
                 # https://arxiv.org/abs/2002.03072
                 loss += det_loss_kl(c_mu, c_log_var)
 
-                # forward pass over the backbone encoder
+                # forward pass over the state-action encoder & dynamics model
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
 
                 # Update the model using backpropagation with given input and target tensors.
-                # if self.deterministic: returns self._mse_loss(model_in, target), {} else returns self._nll_loss(model_in, target), {}
+                # if self.deterministic: returns self._mse_loss(model_in, target), {}
+                # else returns self._nll_loss(model_in, target), {}
                 loss_ = self.model.loss(model_in, target)[0]
                 loss_and_maybe_meta.append(loss_.reshape(1, -1))
-            loss_and_maybe_meta = torch.mean(torch.cat(loss_and_maybe_meta, dim=-1), dim=-1)[0]
+            loss_and_maybe_meta = torch.mean(
+                torch.cat(loss_and_maybe_meta, dim=-1), dim=-1
+            )[0]
         else:
-            # Update the model using backpropagation with given input and target tensors.
-            # if self.deterministic: returns self._mse_loss(model_in, target), {} else returns self._nll_loss(model_in, target), {}
             s_t = model_in[..., :-1]
             a_t = model_in[..., -1:]
             # forward pass over the backbone encoder
@@ -340,24 +336,26 @@ class TransitionRewardModel(Model):
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
             if self.use_context:
-                context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+                # Split to context, state, action
+                context = model_in[..., : self.context_enc.in_dim]
+                s_t = model_in[..., self.context_enc.in_dim : -1]
+                a_t = model_in[..., -1:]
                 s = context.shape
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
+
+                c_embb, _, _ = self.context_enc.forward(
+                    context.reshape(-1, context.shape[-1])
+                )
                 if len(s) == 3:
                     c_embb = c_embb.reshape(s[0], s[1], -1)
-                    c_mu = c_mu.reshape(s[0], s[1], -1)
-                    c_log_var = c_log_var.reshape(s[0], s[1], -1)
                 else:
                     c_embb = c_embb.reshape(s[0], -1)
-                    c_mu = c_mu.reshape(s[0], -1)
-                    c_log_var = c_log_var.reshape(s[0], -1)
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
                 return self.model.eval_score(model_in, target=target)
             else:
                 s_t = model_in[..., :-1]
                 a_t = model_in[..., -1:]
-                # forward pass over the backbone encoder
+                # forward pass over the state-action encoder & dynamics model
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 return self.model.eval_score(b_embb, target=target)
 
@@ -379,17 +377,19 @@ class TransitionRewardModel(Model):
         with torch.no_grad():
             model_in, target = self._process_batch(batch)
             if self.use_context:
-                context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+                # Split to context, state, action
+                context = model_in[..., : self.context_enc.in_dim]
+                s_t = model_in[..., self.context_enc.in_dim : -1]
+                a_t = model_in[..., -1:]
                 s = context.shape
-                c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
+
+                c_embb, _, _ = self.context_enc.forward(
+                    context.reshape(-1, context.shape[-1])
+                )
                 if len(s) == 3:
                     c_embb = c_embb.reshape(s[0], s[1], -1)
-                    c_mu = c_mu.reshape(s[0], s[1], -1)
-                    c_log_var = c_log_var.reshape(s[0], s[1], -1)
                 else:
                     c_embb = c_embb.reshape(s[0], -1)
-                    c_mu = c_mu.reshape(s[0], -1)
-                    c_log_var = c_log_var.reshape(s[0], -1)
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
                 output = self.model.forward(model_in)
@@ -397,7 +397,6 @@ class TransitionRewardModel(Model):
             else:
                 s_t = model_in[..., :-1]
                 a_t = model_in[..., -1:]
-                # forward pass over the backbone encoder
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 output = self.model.forward(b_embb)
                 return output, target
@@ -406,8 +405,8 @@ class TransitionRewardModel(Model):
         self,
         act: torch.Tensor,
         model_state: Dict[str, torch.Tensor],
-        initial_context = None,
-        c_embb = None,
+        initial_context: np.ndarray = None,
+        c_embb: np.ndarray = None,
         deterministic: bool = False,
         rng: Optional[torch.Generator] = None,
     ) -> Tuple[
@@ -424,6 +423,8 @@ class TransitionRewardModel(Model):
         Args:
             act (tensor): the action at.
             model_state (dict(str, tensor)): the model state st.
+            initial_context (np.ndarray, Optional): context vector
+            c_embb (np.ndarray, Optional): context embedding
             deterministic (bool): if ``True``, the model returns a deterministic
                 "sample" (e.g., the mean prediction). Defaults to ``False``.
             rng (random number generator): a rng to use for sampling.
@@ -438,7 +439,9 @@ class TransitionRewardModel(Model):
 
         if initial_context is not None:
             if len(initial_context.shape) == 1 and len(model_state["obs"].shape) == 2:
-                initial_context = np.repeat(initial_context[None, :], model_state["obs"].shape[0], axis=0).astype(np.float32)
+                initial_context = np.repeat(
+                    initial_context[None, :], model_state["obs"].shape[0], axis=0
+                ).astype(np.float32)
 
         model_in = self._get_model_input(model_state["obs"], act, initial_context)
         if not hasattr(self.model, "sample_1d"):
@@ -447,23 +450,25 @@ class TransitionRewardModel(Model):
             )
 
         if self.use_context:
-            context, s_t, a_t = model_in[..., :self.context_enc.in_dim], model_in[..., self.context_enc.in_dim:-1], model_in[..., -1:]
+            # Split to context, state, action
+            context = model_in[..., : self.context_enc.in_dim]
+            s_t = model_in[..., self.context_enc.in_dim : -1]
+            a_t = model_in[..., -1:]
             s = context.shape
-            c_embb, c_mu, c_log_var = self.context_enc.forward(context.reshape(-1, context.shape[-1]))
+
+            c_embb, _, _ = self.context_enc.forward(
+                context.reshape(-1, context.shape[-1])
+            )
             if len(s) == 3:
                 c_embb = c_embb.reshape(s[0], s[1], -1)
-                c_mu = c_mu.reshape(s[0], s[1], -1)
-                c_log_var = c_log_var.reshape(s[0], s[1], -1)
             else:
                 c_embb = c_embb.reshape(s[0], -1)
-                c_mu = c_mu.reshape(s[0], -1)
-                c_log_var = c_log_var.reshape(s[0], -1)
             b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
             model_in = torch.cat([c_embb, b_embb], dim=-1)
         else:
             s_t = model_in[..., :-1]
             a_t = model_in[..., -1:]
-            # forward pass over the backbone encoder
+
             model_in = self.stateaction_enc.joint_embb(s_t, a_t)
 
         preds, next_model_state = self.model.sample_1d(
@@ -481,7 +486,7 @@ class TransitionRewardModel(Model):
         self,
         act: torch.Tensor,
         model_state: Dict[str, torch.Tensor],
-        c_embb,
+        c_embb: np.ndarray,
         deterministic: bool = False,
         rng: Optional[torch.Generator] = None,
     ) -> Tuple[
@@ -498,6 +503,7 @@ class TransitionRewardModel(Model):
         Args:
             act (tensor): the action at.
             model_state (dict(str, tensor)): the model state st.
+            c_embb (np.ndarray): context embedding
             deterministic (bool): if ``True``, the model returns a deterministic
                 "sample" (e.g., the mean prediction). Defaults to ``False``.
             rng (random number generator): a rng to use for sampling.
@@ -508,16 +514,20 @@ class TransitionRewardModel(Model):
         obs = model_util.to_tensor(model_state["obs"]).to(self.device)
 
         if len(obs.shape) == 2:
-            c_embb = np.repeat(c_embb, model_state["obs"].shape[0], axis=0).astype(np.float32)
+            c_embb = np.repeat(c_embb, model_state["obs"].shape[0], axis=0).astype(
+                np.float32
+            )
             c_embb = model_util.to_tensor(c_embb).float().to(self.device)
 
+        # Dont need to pass context because we already have the embedding
         model_in = self._get_model_input(model_state["obs"], act)
         if not hasattr(self.model, "sample_1d"):
             raise RuntimeError(
                 "OneDTransitionRewardModel requires wrapped model to define method sample_1d"
             )
 
-        s_t, a_t = model_in[..., :-1], model_in[..., -1:]
+        s_t = model_in[..., :-1]
+        a_t = model_in[..., -1:]
         b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
         model_in = torch.cat([c_embb, b_embb], dim=-1)
 
@@ -531,7 +541,6 @@ class TransitionRewardModel(Model):
         rewards = preds[:, -1:] if self.learned_rewards else None
         next_model_state["obs"] = next_observs
         return next_observs, rewards, None, next_model_state
-
 
     def reset(
         self, obs: torch.Tensor, rng: Optional[torch.Generator] = None
@@ -557,14 +566,14 @@ class TransitionRewardModel(Model):
         return model_state
 
     def save(self, save_dir: Union[str, pathlib.Path]):
-        self.model.save(pathlib.Path(save_dir) / 'gaussian_mlp.pth')
+        self.model.save(pathlib.Path(save_dir) / "gaussian_mlp.pth")
         self.context_enc.save(save_dir)
         self.stateaction_enc.save(save_dir)
         if self.input_normalizer:
             self.input_normalizer.save(save_dir)
 
     def load(self, load_dir: Union[str, pathlib.Path]):
-        self.model.load(pathlib.Path(load_dir) / 'gaussian_mlp.pth')
+        self.model.load(pathlib.Path(load_dir) / "gaussian_mlp.pth")
         self.context_enc.load(load_dir)
         self.stateaction_enc.load(load_dir)
         if self.input_normalizer:
@@ -581,42 +590,63 @@ class TransitionRewardModel(Model):
             self.model.set_propagation_method(propagation_method)
 
     def _context_vec_delta_to_abs_state_action(self, context_vec, state_sz, action_sz):
+        """Convert context vector to states and actions array"""
         states = [context_vec[:state_sz]]
-        actions = [context_vec[state_sz:state_sz+action_sz]]
-        for i in range(state_sz+action_sz-1, context_vec.shape[0]-1, state_sz+action_sz):
-            states.append(states[-1] + context_vec[i:i+state_sz])
-            actions.append(context_vec[i+state_sz:i+state_sz+action_sz])
+        actions = [context_vec[state_sz : state_sz + action_sz]]
+        for i in range(
+            state_sz + action_sz - 1, context_vec.shape[0] - 1, state_sz + action_sz
+        ):
+            states.append(states[-1] + context_vec[i : i + state_sz])
+            actions.append(context_vec[i + state_sz : i + state_sz + action_sz])
         return np.stack(states, axis=0), np.concatenate(actions, axis=-1)
 
-
     def _pick_strongest_sample(self, z_samples, states, actions):
-        scores = np.zeros((self.mc_samples,))
+        """Pick strongest latent context embedding sample based on prediction
+        error
+        """
+        scores = np.zeros((self.eval_cfg.mc_samples,))
         with torch.no_grad():
-            # contruct a batch predictor
+            # contruct a batch predictor over the past states and actions
             model_in = self._get_model_input(states, actions[:, None])
-            s_t, a_t = model_in[..., :-1].float(), model_in[..., -1:].float()
-            for mc_run in range(self.mc_samples):
-                # use the right embedder
-                c_embb = model_util.to_tensor(z_samples[mc_run, :]).float().to(self.device).repeat(s_t.shape[0], 1)
-                # forward pass over the backbone encoder
+            s_t = model_in[..., :-1].float()
+            a_t = model_in[..., -1:].float()
+            for mc_run in range(self.eval_cfg.mc_samples):
+                c_embb = (
+                    model_util.to_tensor(z_samples[mc_run, :])
+                    .float()
+                    .to(self.device)
+                    .repeat(s_t.shape[0], 1)
+                )
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
                 model_in = torch.cat([c_embb, b_embb], dim=-1)
-                means, _ = self.model.forward(model_in, use_propagation=False)
-                means = torch.mean(means, dim=0).cpu().numpy()
+                next_state_delta_mu, _ = self.model.forward(model_in, use_propagation=False)
+                means = torch.mean(next_state_delta_mu, dim=0).cpu().numpy()
+
+                # construct the target
                 target = states[1:] - states[:1]
-                scores[mc_run] = np.sum((target - means[:-1, :-1])**2)/((len(states) - 1)*states.shape[-1])
+                # exclude the last prediction, reward for each prediction
+                scores[mc_run] = np.sum((target - means[:-1, :-1]) ** 2) / (
+                    (len(states) - 1) * states.shape[-1]
+                )
         return np.argmin(scores)
 
-
-    def _maybe_strongest_mc_sample_context_enc(self, initial_context, state_sz, action_sz):
+    def _maybe_strongest_mc_sample_context_enc(
+        self, initial_context, state_sz, action_sz
+    ):
         """Monte-Carlo sample <self.mc_sample>'s from P(C | <initial_context>)"""
-        states, actions = self._context_vec_delta_to_abs_state_action(initial_context, state_sz, action_sz)
+        states, actions = self._context_vec_delta_to_abs_state_action(
+            initial_context, state_sz, action_sz
+        )
+
+        # MC sample the posterior
         initial_context = model_util.to_tensor(initial_context).unsqueeze(0).float().to(self.device)
         with torch.no_grad():
             dist = self.context_enc.dist(initial_context)
-        z_samples = dist.sample(sample_shape=(self.mc_samples,)).to(dtype=torch.float32, device=self.device)
+        z_samples = dist.sample(sample_shape=(self.eval_cfg.mc_samples,)).cpu().numpy()
+
+        # Pick the strongest posterior sample
         strongest_idx = self._pick_strongest_sample(z_samples, states, actions)
-        return z_samples[strongest_idx, :].cpu().numpy()
+        return z_samples[strongest_idx, :]
 
 
 def create_model(
@@ -668,10 +698,10 @@ def create_model(
     model = hydra.utils.instantiate(cfg.dynamics_model.model)
 
     dynamics_model = TransitionRewardModel(
-        model,
-        context_cfg,
-        backbone_cfg,
-        eval_cfg,
+        model=model,
+        context_cfg=context_cfg,
+        backbone_cfg=backbone_cfg,
+        eval_cfg=eval_cfg,
         use_context=use_context,
         target_is_delta=cfg.algorithm.target_is_delta,
         normalize=cfg.algorithm.normalize,
@@ -685,75 +715,3 @@ def create_model(
         dynamics_model.load(model_dir)
 
     return dynamics_model
-
-
-if __name__=='__main__':
-    import omegaconf
-
-    trial_length = 200
-    num_trials = 10
-    ensemble_size = 5
-
-    context_cfg = {
-        'state_sz': 6,
-        'action_sz': 1,
-        'hidden_dim': 128,
-        'hidden_layers': 1,
-        'out_dim': 32,
-        'history_size': 16
-    }
-
-    backbone_cfg = {
-        'state_sz': 6,
-        'action_sz': 1,
-        'hidden_dim': 128,
-        'hidden_layers': 1,
-        'out_dim': 32
-    }
-
-
-    # Everything with "???" indicates an option with a missing value.
-    # Our utility functions will fill in these details using the
-    # environment information
-    cfg_dict = {
-        # dynamics model configuration
-        "dynamics_model": {
-            "model":
-            {
-                "_target_": "GaussianMLP",
-                "device": 'cpu',
-                "num_layers": 3,
-                "ensemble_size": ensemble_size,
-                "hid_size": 128,
-                "in_size": context_cfg['out_dim']+backbone_cfg['out_dim'],
-                "out_size": "???",
-                "deterministic": False,
-                "propagation_method": "fixed_model",
-                # can also configure activation function for GaussianMLP
-                "activation_fn_cfg": {
-                    "_target_": "torch.nn.LeakyReLU",
-                    "negative_slope": 0.01
-                }
-            }
-        },
-        # options for training the dynamics model
-        "algorithm": {
-            "learned_rewards": False,
-            "target_is_delta": True,
-            "normalize": True,
-        },
-        # these are experiment specific options
-        "overrides": {
-            "trial_length": trial_length,
-            "num_steps": num_trials * trial_length,
-            "model_batch_size": 32,
-            "validation_ratio": 0.05,
-        }
-    }
-    cfg = omegaconf.OmegaConf.create(cfg_dict)
-
-    dynamics_model = create_model(cfg, context_cfg, backbone_cfg)
-    print(dynamics_model.forward(torch.zeros((10, 64)), propagation_indices=[0, 1, 2, 3, 4, 0, 1, 2, 3, 4]))
-
-    model = mbrl.models.gaussian_mlp.GaussianMLP(64, 2, torch.device('cpu'), ensemble_size=5, propagation_method="random_model")
-    print(model.forward(torch.zeros((10, 64))))

@@ -1,10 +1,11 @@
+"""
+Parts of this code was borrowed from:
+https://github.com/facebookresearch/mbrl-lib
+"""
+
 import numpy as np
 import torch
 
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
 from typing import Dict, Optional, Tuple
 
 import gym
@@ -22,18 +23,6 @@ class ModelEnv:
     to use this class is for the model to use this wrapper is to have a method called
     ``predict()``
     with signature `next_observs, rewards = model.predict(obs, actions, sample=, rng=)`
-
-    Args:
-        env (gym.Env): the original gym environment for which the model was trained.
-        model (:class:`mbrl.models.Model`): the model to wrap.
-        termination_fn (callable): a function that receives actions and observations, and
-            returns a boolean flag indicating whether the episode should end or not.
-        reward_fn (callable, optional): a function that receives actions and observations
-            and returns the value of the resulting reward in the environment.
-            Defaults to ``None``, in which case predicted rewards will be used.
-        generator (torch.Generator, optional): a torch random number generator (must be in the
-            same device as the given model). If None (default value), a new generator will be
-            created using the default torch seed.
     """
 
     def __init__(
@@ -44,7 +33,9 @@ class ModelEnv:
         reward_fn: Optional[mbrl.types.RewardFnType] = None,
         generator: Optional[torch.Generator] = None,
     ):
-        self.dynamics_model = model             # whole model containing dynamics, backbone and context_enc
+        # whole model containing dynamics, backbone and context_enc
+        self.dynamics_model = model
+
         self.termination_fn = termination_fn
         self.reward_fn = reward_fn
         self.device = model.device
@@ -88,8 +79,8 @@ class ModelEnv:
         self,
         actions: mbrl.types.TensorType,
         model_state: Dict[str, torch.Tensor],
-        context = None,
-        c_embb=None,
+        context: torch.Tensor = None,
+        c_embb: torch.Tensor = None,
         sample: bool = False,
     ) -> Tuple[mbrl.types.TensorType, mbrl.types.TensorType, np.ndarray, Dict]:
         """Steps the model environment with the given batch of actions.
@@ -102,6 +93,7 @@ class ModelEnv:
                 converted to a torch.Tensor and sent to the model device.
             model_state (dict(str, tensor)): the model state as returned by :meth:`reset()`.
             context (torch.Tensor or np.ndarray, Optional): the context to use.
+            c_embb (torch.Tensor or np.ndarray, Optional): Directly use this context embedding
             sample (bool): if ``True`` model predictions are stochastic. Defaults to ``False``.
 
         Returns:
@@ -152,9 +144,14 @@ class ModelEnv:
         action_sequences: torch.Tensor,
         initial_state: np.ndarray,
         num_particles: int,
-        initial_context=None
+        initial_context: np.ndarray = None,
     ) -> torch.Tensor:
         """Evaluates a batch of action sequences on the model.
+        
+        NOTE: This is the default method to evaluate action sequences.
+              Here, we compute the expected cummulative reward for each
+              trajectory sequence. Rewards used are predicted by the forward
+              dynamics model. Latent context are sampled i.i.d for each sequence.
 
         Args:
             action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
@@ -200,13 +197,15 @@ class ModelEnv:
         action_sequences: torch.Tensor,
         initial_state: np.ndarray,
         num_particles: int,
-        initial_context=None
+        initial_context: np.ndarray = None,
     ) -> torch.Tensor:
         """Evaluates a batch of action sequences on the model.
 
-        NOTE: Only uses KL divergence to perform SAFE actions! Adds a penalty
-        to keep future state-action sequence context embedding close to current
-        previous context embedding
+        NOTE: This method weights the expected cumulative reward from taking an
+              action sequence by the KL divergence of the traced state-action
+              sequence. The intuition is that we want to plan actions that do
+              not deviate far from the current posterior over the latent context.
+              This behaves as SAFE exploration!
 
         Args:
             action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
@@ -225,6 +224,7 @@ class ModelEnv:
             len(action_sequences.shape) == 3
         )  # population_size, horizon, action_shape
         population_size, horizon, action_dim = action_sequences.shape
+        state_dim = model_state["obs"].shape[-1]
         initial_obs_batch = np.tile(
             initial_state, (num_particles * population_size, 1)
         ).astype(np.float32)
@@ -232,10 +232,11 @@ class ModelEnv:
         batch_size = initial_obs_batch.shape[0]
         total_rewards = torch.zeros(batch_size, 1).to(self.device)
         terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
-        state_dim = model_state["obs"].shape[-1]
 
-        # stack trajectory rollouts here
-        context_vec = torch.zeros((batch_size, self.dynamics_model.context_enc.in_dim), dtype=torch.float32).to(self.device)
+        # stack trajectory (state-action) rollouts
+        generated_context_vec = torch.zeros(
+            (batch_size, self.dynamics_model.context_enc.in_dim), dtype=torch.float32
+        ).to(self.device)
 
         for time_step in range(horizon):
             actions_for_step = action_sequences[:, time_step, :]
@@ -243,8 +244,9 @@ class ModelEnv:
                 actions_for_step, num_particles, dim=0
             )
 
-            context_vec[:, time_step:time_step+state_dim] = model_state["obs"]
-            context_vec[:, time_step+state_dim::time_step+state_dim+1] = action_batch
+            # Store state, action
+            generated_context_vec[:, time_step : time_step + state_dim] = model_state["obs"]
+            generated_context_vec[:, time_step + state_dim : time_step + state_dim + action_dim] = action_batch
 
             _, rewards, dones, model_state = self.step(
                 action_batch, model_state, initial_context, sample=True
@@ -254,18 +256,20 @@ class ModelEnv:
             terminated |= dones.reshape(-1, 1)
             total_rewards += rewards
 
-        # get the context for the new trajectories
+        # Get the posterior for the new generated context vec and past context vec 
         with torch.no_grad():
-            _, mu, log_var = self.dynamics_model.context_enc.forward(context_vec)
+            _, mu, log_var = self.dynamics_model.context_enc.forward(generated_context_vec)
             new_dist = Normal(mu, torch.exp(log_var))
-            
+
             if not isinstance(initial_context, torch.Tensor):
                 initial_context = torch.tensor(initial_context).float().to(self.device)
 
             _, mu, log_var = self.dynamics_model.context_enc.forward(initial_context)
             old_dist = Normal(mu, torch.exp(log_var))
 
-        total_rewards *= kl_divergence(old_dist, new_dist).mean(dim=1).reshape(-1, 1)
+        # Weight the total reward for each trajectory by the KL divergence
+        total_rewards *= self.dynamics_model.kl_weight \
+                        * kl_divergence(old_dist, new_dist).mean(dim=1).reshape(-1, 1)
 
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)
@@ -275,12 +279,17 @@ class ModelEnv:
         action_sequences: torch.Tensor,
         initial_state: np.ndarray,
         num_particles: int,
-        initial_context=None
+        initial_context: np.ndarray = None,
     ) -> torch.Tensor:
         """Evaluates a batch of action sequences on the model.
 
-        NOTE: Uses both prediction rewards & KL divergence to trade-off myopic
-        & non-myopic actions! Adds both terms.
+        NOTE: Instead of sampling the posterior while evaluating each trajectory,
+              we Monte Carlo sample the posterior and use a prediction loss
+              over the context vector to greedily select the context embedding
+              with the lowest prediction loss. The intuition is that we want to
+              use an embedding that most closely follows the dynamics of the
+              MDP. The rest of the evaluation function remains the same.
+              This behaves as GREEDY exploration!
 
         Args:
             action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
@@ -305,185 +314,34 @@ class ModelEnv:
         model_state = self.reset(initial_obs_batch, return_as_np=False)
         batch_size = initial_obs_batch.shape[0]
         total_rewards = torch.zeros(batch_size, 1).to(self.device)
+        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
 
-        # MC sample to get {z'}_k ~ p(z | <initial_context>), and pick strongest
-        # sample
+        # MC sample {z'}_k ~ p(z | <initial_context>) & pick strongest sample
         z_sample = self.dynamics_model._maybe_strongest_mc_sample_context_enc(
-            initial_context,
-            model_state["obs"].shape[-1],
-            action_dim
+            initial_context=initial_context, 
+            state_sz=model_state["obs"].shape[-1],
+            action_sz=action_dim
         )
 
-        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
         for time_step in range(horizon):
             actions_for_step = action_sequences[:, time_step, :]
             action_batch = torch.repeat_interleave(
                 actions_for_step, num_particles, dim=0
             )
+
+            # rather than passing the context vec, directly specify the context
+            # embedding we found earlier to context-condition the dynamics model
             _, rewards, dones, model_state = self.step(
-                action_batch, model_state, None, z_sample, sample=True
+                actions=action_batch,
+                model_state=model_state,
+                context=None,
+                c_embb=z_sample,
+                sample=True
             )
+
             rewards[terminated] = 0
             terminated |= dones.reshape(-1, 1)
             total_rewards += rewards
 
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)
-
-    def evaluate_action_sequences_combine(
-        self,
-        action_sequences: torch.Tensor,
-        initial_state: np.ndarray,
-        num_particles: int,
-        initial_context=None
-    ) -> torch.Tensor:
-        """Evaluates a batch of action sequences on the model.
-
-        NOTE: Uses both prediction rewards & KL divergence to trade-off myopic
-        & non-myopic actions! Adds both terms.
-
-        Args:
-            action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
-                be ``B x H x A``, where ``B``, ``H``, and ``A`` represent batch size, horizon,
-                and action dimension, respectively.
-            initial_state (np.ndarray): the initial state for the trajectories.
-            num_particles (int): number of times each action sequence is replicated. The final
-                value of the sequence will be the average over its particles values.
-            initial_context (np.ndarray, Optional): context for the rollout
-
-        Returns:
-            (torch.Tensor): the accumulated reward for each action sequence, averaged over its
-            particles.
-        """
-        assert (
-            len(action_sequences.shape) == 3
-        )  # population_size, horizon, action_shape
-        population_size, horizon, action_dim = action_sequences.shape
-        initial_obs_batch = np.tile(
-            initial_state, (num_particles * population_size, 1)
-        ).astype(np.float32)
-        model_state = self.reset(initial_obs_batch, return_as_np=False)
-        batch_size = initial_obs_batch.shape[0]
-        total_rewards = torch.zeros(batch_size, 1).to(self.device)
-
-        # MC sample to get {z'}_k ~ p(z | <initial_context>), and pick strongest
-        # sample
-        z_sample = self.dynamics_model._maybe_strongest_mc_sample_context_enc(
-            initial_context,
-            model_state["obs"].shape[-1],
-            action_dim
-        )
-
-        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
-        for time_step in range(horizon):
-            actions_for_step = action_sequences[:, time_step, :]
-            action_batch = torch.repeat_interleave(
-                actions_for_step, num_particles, dim=0
-            )
-            _, rewards, dones, model_state = self.step(
-                action_batch, model_state, None, z_sample, sample=True
-            )
-            rewards[terminated] = 0
-            terminated |= dones.reshape(-1, 1)
-            total_rewards += rewards
-
-        total_rewards = total_rewards.reshape(-1, num_particles)
-        return total_rewards.mean(dim=1)
-
-if __name__=='__main__':
-    import sys
-    sys.path.append("..")  # Adds higher directory to python modules path.
-
-    import math
-    import yaml
-    from easydict import EasyDict
-    import omegaconf
-    from transitionreward import create_model
-
-    from envs import ContexualEnv
-    from envs.CartpoleBalance import CartPoleEnv_template
-
-    with open('../configs/cartpole.yaml') as f:
-        config = yaml.safe_load(f)
-        config['device'] = torch.device('cpu')
-    config = EasyDict(config)
-
-    env_fam = ContexualEnv(config)
-    env, context = env_fam.reset(train=True)
-
-    trial_length = 200
-    num_trials = 10
-    ensemble_size = 5
-
-    context_cfg = {
-        'state_sz': env.observation_space.shape[0],
-        'action_sz': 1,
-        'hidden_dim': 128,
-        'hidden_layers': 1,
-        'out_dim': 32,
-        'history_size': 16
-    }
-
-    backbone_cfg = {
-        'state_sz': env.observation_space.shape[0],
-        'action_sz': 1,
-        'hidden_dim': 128,
-        'hidden_layers': 1,
-        'out_dim': 32
-    }
-
-    # Everything with "???" indicates an option with a missing value.
-    # Our utility functions will fill in these details using the
-    # environment information
-    cfg_dict = {
-        # dynamics model configuration
-        "dynamics_model": {
-            "model":
-            {
-                "_target_": "mbrl.models.GaussianMLP",
-                "device": 'cpu',
-                "num_layers": 3,
-                "ensemble_size": ensemble_size,
-                "hid_size": 128,
-                "in_size": context_cfg['out_dim']+backbone_cfg['out_dim'],
-                "out_size": "???",
-                "deterministic": False,
-                "propagation_method": "fixed_model",
-                # can also configure activation function for GaussianMLP
-                "activation_fn_cfg": {
-                    "_target_": "torch.nn.LeakyReLU",
-                    "negative_slope": 0.01
-                }
-            }
-        },
-        # options for training the dynamics model
-        "algorithm": {
-            "learned_rewards": False,
-            "target_is_delta": True,
-            "normalize": True,
-        },
-        # these are experiment specific options
-        "overrides": {
-            "trial_length": trial_length,
-            "num_steps": num_trials * trial_length,
-            "model_batch_size": 32,
-            "validation_ratio": 0.05,
-        }
-    }
-    cfg = omegaconf.OmegaConf.create(cfg_dict)
-    
-    def term_fn(action, state):
-        x, x_dot, theta, theta_dot = state
-        done = x < -2.4 \
-               or x > 2.4 \
-               or theta < -(12 * 2 * math.pi / 360) \
-               or theta > (12 * 2 * math.pi / 360)
-        done = bool(done)
-        return done
-
-    reward_fn = None
-
-    dynamics_model = create_model(cfg, context_cfg, backbone_cfg)
-    model_env = ModelEnv(env, dynamics_model, term_fn, reward_fn)
-
-    print(model_env)
