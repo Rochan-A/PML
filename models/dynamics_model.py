@@ -224,11 +224,11 @@ class ModelEnv:
             len(action_sequences.shape) == 3
         )  # population_size, horizon, action_shape
         population_size, horizon, action_dim = action_sequences.shape
-        state_dim = model_state["obs"].shape[-1]
         initial_obs_batch = np.tile(
             initial_state, (num_particles * population_size, 1)
         ).astype(np.float32)
         model_state = self.reset(initial_obs_batch, return_as_np=False)
+        state_dim = model_state["obs"].shape[-1]
         batch_size = initial_obs_batch.shape[0]
         total_rewards = torch.zeros(batch_size, 1).to(self.device)
         terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
@@ -268,8 +268,7 @@ class ModelEnv:
             old_dist = Normal(mu, torch.exp(log_var))
 
         # Weight the total reward for each trajectory by the KL divergence
-        total_rewards *= self.dynamics_model.kl_weight \
-                        * kl_divergence(old_dist, new_dist).mean(dim=1).reshape(-1, 1)
+        total_rewards *= (1 - (self.dynamics_model.eval_cfg.kl_weight*kl_divergence(new_dist, old_dist).mean(dim=1).reshape(-1, 1)))
 
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)

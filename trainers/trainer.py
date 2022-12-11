@@ -635,6 +635,7 @@ class Trainer(object):
         plt.figure(dpi=200)
         plt.xlabel(xlabel)
         plt.yticks(np.arange(0, 200, 20))
+        plt.ylim([0, 200])
         plt.ylabel(ylabel)
         plt.plot(data, "bs-")
         plt.savefig(path)

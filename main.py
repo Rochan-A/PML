@@ -210,14 +210,14 @@ if __name__ == "__main__":
     else:
         raise ValueError(str(args.config))
 
-    # generate save path
     PATH = gen_save_path(args, config)
-    make_dirs(PATH)
 
     if args.no_test_flag:
+        make_dirs(PATH)
         _ = train(args, config, PATH)
     elif args.only_test_flag:
         test(args, config)
     else:
+        make_dirs(PATH)
         data = train(args, config, PATH)
         test(args, config, data['model'])
