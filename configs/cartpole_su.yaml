@@ -50,7 +50,7 @@ agent:
     # MC updates to take when updating the model
     mc_update: 2
     # Method to use 'default', 'greedy', 'kl', 'combine'
-    method: kl
+    method: greedy
     # Samples from context to consider
     mc_samples: 50
     # Weight for pred_reward

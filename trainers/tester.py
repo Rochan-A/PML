@@ -4,6 +4,7 @@ import torch
 import omegaconf
 from pprint import pprint
 from os.path import join
+from tqdm import tqdm, trange
 
 from models.transitionreward import create_model
 from models.dynamics_model import ModelEnv
@@ -32,7 +33,7 @@ def create_agent(agent_cfg, model_env, config):
         "default": model_env.evaluate_action_sequences,
         "kl": model_env.evaluate_action_sequences_kl,
         "greedy": model_env.evaluate_action_sequences_greedy,
-        "combine": model_env.evaluate_action_sequences_combine,
+        # "combine": model_env.evaluate_action_sequences_combine,
     }
 
     if eval_cfg.method == "combine":
@@ -122,7 +123,11 @@ class Tester(object):
 
             # Create a dynamics model for this environment
             self.dynamics_model = create_model(
-                self.cfg, self.context_cfg, self.stateaction_cfg, False if self.context_len is None else True
+                cfg=self.cfg,
+                context_cfg=self.context_cfg,
+                stateaction_cfg=self.stateaction_cfg,
+                eval_cfg=config.agent.eval,
+                use_context=False if self.context_len is None else True
             )
 
             # load the model
@@ -182,10 +187,10 @@ class Tester(object):
             # same MDP.
             env, ctx_vals = env_fam.reset(idx=MDP)
             all_contexts.append(ctx_vals)
-            print('trial: {}\t Context vector: {}'.format(trial, ctx_vals if ctx_vals is not None else '<fixed>'))
+            print('trial: {}\t Context vector: {}'.format(MDP, ctx_vals if ctx_vals is not None else '<fixed>'))
 
             rewards = []
-            for trial in range(num_trials):
+            for trial in trange(num_trials):
 
                 obs = env.reset()
                 if self.context_len:

@@ -55,7 +55,7 @@ class ContexualEnv:
     def __init__(self, config, rng) -> None:
         super().__init__()
 
-        self.c_train = ContextSampler(config.train_params[0], rng)
+        self.c_train = ContextSampler(config.train_params[0], rng=rng)
         self.c_test = ContextSampler(config.test_range[0], deterministic=True)
 
         if config.env == "CartpoleBalance":

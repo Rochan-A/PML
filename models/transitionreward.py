@@ -652,7 +652,7 @@ class TransitionRewardModel(Model):
 def create_model(
     cfg,
     context_cfg,
-    backbone_cfg,
+    stateaction_cfg,
     eval_cfg,
     use_context,
     model_dir: Optional[Union[str, pathlib.Path]] = None,
@@ -700,7 +700,7 @@ def create_model(
     dynamics_model = TransitionRewardModel(
         model=model,
         context_cfg=context_cfg,
-        backbone_cfg=backbone_cfg,
+        stateaction_cfg=stateaction_cfg,
         eval_cfg=eval_cfg,
         use_context=use_context,
         target_is_delta=cfg.algorithm.target_is_delta,

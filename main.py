@@ -178,7 +178,7 @@ def test(args, config, model=None):
     pprint(tester_cfg)
 
     tester = Tester(**tester_cfg)
-    data = tester.run(env_fam, env, 30, PATH)
+    data = tester.run(env_fam, env, 10, PATH)
 
     compress_pickle(join(PATH, 'test_data.pkl'), data)
 
