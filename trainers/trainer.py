@@ -222,7 +222,7 @@ def create_agent(agent_cfg, model_env, config):
         "default": model_env.evaluate_action_sequences,
         "kl": model_env.evaluate_action_sequences_kl,
         "greedy": model_env.evaluate_action_sequences_greedy,
-        # "combine": model_env.evaluate_action_sequences_combine,
+        "combined": model_env.evaluate_action_sequences_combined,
     }
 
     if eval_cfg.method == "combine":

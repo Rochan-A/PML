@@ -68,7 +68,7 @@ def gen_save_path(args, config):
         PATH = join(PATH, "raw")
 
     PATH = join(PATH, "seed_" + str(args.seed))
-    DT = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+    DT = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M") if args.exp_name is None else args.exp_name
     PATH = join(PATH, DT)
 
     print('#'*80)
@@ -178,7 +178,7 @@ def test(args, config, model=None):
     pprint(tester_cfg)
 
     tester = Tester(**tester_cfg)
-    data = tester.run(env_fam, env, 10, PATH)
+    data = tester.run(env_fam, env, 5, PATH)
 
     compress_pickle(join(PATH, 'test_data.pkl'), data)
 
@@ -186,7 +186,8 @@ def test(args, config, model=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Code to test Generalization in Contextual MDPs for MBRL")
     parser.add_argument("--config", help="config file")
-    parser.add_argument("--root", default="./saves/", help="experiments name")
+    parser.add_argument("--root", default="./saves/", help="root folder to save experiments")
+    parser.add_argument("--exp-name", default=None, help="experiment name")
     parser.add_argument("--load", help="path to load models from")
     parser.add_argument("--logger", action="store_true", help="Print training log")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")

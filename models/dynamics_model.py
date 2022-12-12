@@ -344,3 +344,100 @@ class ModelEnv:
 
         total_rewards = total_rewards.reshape(-1, num_particles)
         return total_rewards.mean(dim=1)
+
+    def evaluate_action_sequences_combined(
+        self,
+        action_sequences: torch.Tensor,
+        initial_state: np.ndarray,
+        num_particles: int,
+        initial_context: np.ndarray = None,
+    ) -> torch.Tensor:
+        """Evaluates a batch of action sequences on the model.
+
+        NOTE: Instead of sampling the posterior while evaluating each trajectory,
+              we Monte Carlo sample the posterior and use a prediction loss
+              over the context vector to greedily select the context embedding
+              with the lowest prediction loss. The intuition is that we want to
+              use an embedding that most closely follows the dynamics of the
+              MDP. The rest of the evaluation function remains the same.
+              This behaves as GREEDY exploration!
+
+        Args:
+            action_sequences (torch.Tensor): a batch of action sequences to evaluate.  Shape must
+                be ``B x H x A``, where ``B``, ``H``, and ``A`` represent batch size, horizon,
+                and action dimension, respectively.
+            initial_state (np.ndarray): the initial state for the trajectories.
+            num_particles (int): number of times each action sequence is replicated. The final
+                value of the sequence will be the average over its particles values.
+            initial_context (np.ndarray, Optional): context for the rollout
+
+        Returns:
+            (torch.Tensor): the accumulated reward for each action sequence, averaged over its
+            particles.
+        """
+        assert (
+            len(action_sequences.shape) == 3
+        )  # population_size, horizon, action_shape
+        population_size, horizon, action_dim = action_sequences.shape
+        initial_obs_batch = np.tile(
+            initial_state, (num_particles * population_size, 1)
+        ).astype(np.float32)
+        model_state = self.reset(initial_obs_batch, return_as_np=False)
+        batch_size = initial_obs_batch.shape[0]
+        total_rewards = torch.zeros(batch_size, 1).to(self.device)
+        terminated = torch.zeros(batch_size, 1, dtype=bool).to(self.device)
+
+        # Get the posterior for the context vec, this will allow us to compute
+        # the entropy 
+        with torch.no_grad():
+            if not isinstance(initial_context, torch.Tensor):
+                initial_context_tensor = torch.tensor(initial_context).float().to(self.device)
+            _, mu, log_var = self.dynamics_model.context_enc.forward(initial_context_tensor)
+            dist = Normal(mu, torch.exp(log_var))
+
+        print('Entropy of context: ', dist.entropy())
+
+        for time_step in range(horizon):
+            actions_for_step = action_sequences[:, time_step, :]
+            action_batch = torch.repeat_interleave(
+                actions_for_step, num_particles, dim=0
+            )
+            _, rewards, dones, model_state = self.step(
+                action_batch, model_state, initial_context, sample=True
+            )
+            rewards[terminated] = 0
+            terminated |= dones.reshape(-1, 1)
+            total_rewards += rewards
+
+        total_rewards = total_rewards.reshape(-1, num_particles)
+        return total_rewards.mean(dim=1)
+
+        # # MC sample {z'}_k ~ p(z | <initial_context>) & pick strongest sample
+        # z_sample = self.dynamics_model._maybe_strongest_mc_sample_context_enc(
+        #     initial_context=initial_context, 
+        #     state_sz=model_state["obs"].shape[-1],
+        #     action_sz=action_dim
+        # )
+
+        # for time_step in range(horizon):
+        #     actions_for_step = action_sequences[:, time_step, :]
+        #     action_batch = torch.repeat_interleave(
+        #         actions_for_step, num_particles, dim=0
+        #     )
+
+        #     # rather than passing the context vec, directly specify the context
+        #     # embedding we found earlier to context-condition the dynamics model
+        #     _, rewards, dones, model_state = self.step(
+        #         actions=action_batch,
+        #         model_state=model_state,
+        #         context=None,
+        #         c_embb=z_sample,
+        #         sample=True
+        #     )
+
+        #     rewards[terminated] = 0
+        #     terminated |= dones.reshape(-1, 1)
+        #     total_rewards += rewards
+
+        # total_rewards = total_rewards.reshape(-1, num_particles)
+        # return total_rewards.mean(dim=1)

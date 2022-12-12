@@ -1,4 +1,4 @@
-# Generalization via Online Continual Adaptation in Model-based RL
+# Planning for Generalization in Model-Based RL
 
 ## Setup
 

@@ -1,10 +1,11 @@
 import torch, math
 
 def cartpole_upright_term(action, state):
-    done = (state[:, 0] < -2.4) \
-        or (state[:, 0] > 2.4) \
-        or (state[:, 2] < -(12 * 2 * math.pi / 360)) \
-        or (state[:, 2] > (12 * 2 * math.pi / 360))
+    ones = torch.ones((state.shape[0]), device=state.device)
+    zeros = torch.zeros((state.shape[0]), device=state.device)
+    done = torch.where(state[:, 0] < -2.4, ones, zeros) + torch.where(state[:, 0] > 2.4, ones, zeros) \
+        + torch.where(state[:, 2] < -(12 * 2 * math.pi / 360), ones, zeros) + torch.where(state[:, 0] > (12 * 2 * math.pi / 360), ones, zeros)
+    done = torch.where(done >= 1, ones, zeros).reshape(-1, 1) > 0
     return done
 
 def cartpole_upright_reward(action, next_state):
