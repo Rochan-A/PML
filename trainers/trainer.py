@@ -44,7 +44,7 @@ class RollingHistoryContext:
             self.prev_st = state
             n_state = state
         else:
-            n_state = state - self.prev_st
+            n_state = state# - self.prev_st
             self.prev_st = state
 
         if action is None:

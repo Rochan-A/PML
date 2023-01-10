@@ -5,7 +5,7 @@ env: CartpoleBalance
 # contexts for training
 train_params:
 - polelength: [0.4, 0.6, 0.8, 1., 1.2]
-  masspole: [0.75, 1.0, 1.25]
+  # masspole: [0.75, 1.0, 1.25]
   # masscart: [0.25, 0.5, 1.5, 2.5]
   # gravity: [8.8, 12.0]
   # force_mag: [18.0, 22.0]
@@ -13,7 +13,7 @@ train_params:
 # model contexts for testing
 test_range:
 - polelength: [0.2, 0.5, 0.9, 1.4]
-  masspole: [0.7, 0.9, 1.4]
+  # masspole: [0.7, 0.9, 1.4]
   # masscart: [1.5, 2.5]
   # gravity: [9.8, 12.8]
   # force_mag: [10.0, 15.0]
@@ -23,9 +23,9 @@ normalize_flag: False
 # max len of episode
 trail_length: 200
 # Number of initial trials to fill replay buffer (wo/ agent actions)
-init_trials: 5
+init_trials: 20
 # Number of episodes w/ agent actions
-num_trials: 5
+num_trials: 20
 replay_buffer_sz: 10000
 
 # Use reward function or not (keep false)
@@ -49,14 +49,14 @@ agent:
   eval:
     # MC updates to take when updating the model
     mc_update: 2
-    # Method to use 'default', 'greedy', 'kl', 'combine'
+    # Method to use 'default', 'greedy', 'kl', 'combined'
     method: kl
     # Samples from context to consider
-    mc_samples: 50
+    mc_samples: 5
     # Weight for pred_reward
     pred_weight: 1.
     # Weight for kl_distance
-    kl_weight: 1.
+    kl_weight: 0.2
 
 # Model arch parameters
 context:

@@ -82,6 +82,8 @@ class TransitionRewardModel(Model):
             self.model.device
         )
 
+        self.context_enc.load('/workspace/rochan/model-based/PML/saves/CartpoleSwingUp/raw/seed_0/2023-01-06_09-57')
+
         # configs for evaluating action sequences
         self.eval_cfg = eval_cfg
 
@@ -190,22 +192,23 @@ class TransitionRewardModel(Model):
             a_t = model_in[..., -1:]
             s = context.shape
 
-            c_embb, c_mu, c_log_var = self.context_enc.forward(
-                context.reshape(-1, context.shape[-1])
-            )
-            if len(s) == 3:
-                c_embb = c_embb.reshape(s[0], s[1], -1)
-                c_mu = c_mu.reshape(s[0], s[1], -1)
-                c_log_var = c_log_var.reshape(s[0], s[1], -1)
-            else:
-                c_embb = c_embb.reshape(s[0], -1)
-                c_mu = c_mu.reshape(s[0], -1)
-                c_log_var = c_log_var.reshape(s[0], -1)
+            with torch.no_grad():
+                c_embb, c_mu, c_log_var = self.context_enc.forward(
+                    context.reshape(-1, context.shape[-1])
+                )
+                if len(s) == 3:
+                    c_embb = c_embb.reshape(s[0], s[1], -1)
+                    c_mu = c_mu.reshape(s[0], s[1], -1)
+                    c_log_var = c_log_var.reshape(s[0], s[1], -1)
+                else:
+                    c_embb = c_embb.reshape(s[0], -1)
+                    c_mu = c_mu.reshape(s[0], -1)
+                    c_log_var = c_log_var.reshape(s[0], -1)
 
-            # Context encoder loss based on:
-            # Generalized Hidden Parameter MDPs Transferable Model-based RL in a Handful of Trials
-            # https://arxiv.org/abs/2002.03072
-            loss += det_loss_kl(c_mu, c_log_var)
+                # Context encoder loss based on:
+                # Generalized Hidden Parameter MDPs Transferable Model-based RL in a Handful of Trials
+                # https://arxiv.org/abs/2002.03072
+                # loss += det_loss_kl(c_mu, c_log_var)
 
             # forward pass over the state-action encoder & dynamics model
             b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
@@ -255,22 +258,23 @@ class TransitionRewardModel(Model):
             # Monte Carlo sample from p(c), and avg loss -- context encoder
             loss_and_maybe_meta = []
             for _ in range(self.eval_cfg.mc_update):
-                c_embb, c_mu, c_log_var = self.context_enc.forward(
-                    context.clone()
-                )
-                if len(s) == 3:
-                    c_embb = c_embb.reshape(s[0], s[1], -1)
-                    c_mu = c_mu.reshape(s[0], s[1], -1)
-                    c_log_var = c_log_var.reshape(s[0], s[1], -1)
-                else:
-                    c_embb = c_embb.reshape(s[0], -1)
-                    c_mu = c_mu.reshape(s[0], -1)
-                    c_log_var = c_log_var.reshape(s[0], -1)
+                with torch.no_grad():
+                    c_embb, c_mu, c_log_var = self.context_enc.forward(
+                        context.detach().clone()
+                    )
+                    if len(s) == 3:
+                        c_embb = c_embb.reshape(s[0], s[1], -1)
+                        c_mu = c_mu.reshape(s[0], s[1], -1)
+                        c_log_var = c_log_var.reshape(s[0], s[1], -1)
+                    else:
+                        c_embb = c_embb.reshape(s[0], -1)
+                        c_mu = c_mu.reshape(s[0], -1)
+                        c_log_var = c_log_var.reshape(s[0], -1)
 
-                # Context encoder loss based on:
-                # Generalized Hidden Parameter MDPs Transferable Model-based RL in a Handful of Trials
-                # https://arxiv.org/abs/2002.03072
-                loss += det_loss_kl(c_mu, c_log_var)
+                    # Context encoder loss based on:
+                    # Generalized Hidden Parameter MDPs Transferable Model-based RL in a Handful of Trials
+                    # https://arxiv.org/abs/2002.03072
+                    # loss += det_loss_kl(c_mu, c_log_var)
 
                 # forward pass over the state-action encoder & dynamics model
                 b_embb = self.stateaction_enc.joint_embb(s_t, a_t)
