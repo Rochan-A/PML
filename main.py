@@ -1,9 +1,8 @@
 import yaml, math
 from easydict import EasyDict
-from pathlib import Path
 from os.path import join
 import numpy as np
-import argparse, datetime
+import argparse
 from pprint import pprint
 
 import bz2
@@ -20,61 +19,7 @@ import mbrl.env.termination_fns as termination_fns
 
 from trainers import Trainer, Tester
 from envs import ContexualEnv, DummyContextualEnv, configure_reward_fn, configure_term_fn
-
-
-def without_keys(d, *keys):
-     return dict(filter(lambda key_value: key_value[0] not in keys, d.items()))
-
-
-def compress_pickle(fname, data):
-    with bz2.BZ2File(fname, 'wb') as f:
-        cPickle.dump(data, f)
-
-
-def decompress_pickle(file):
-    data = bz2.BZ2File(file, 'rb')
-    data = cPickle.load(data)
-    return data
-
-
-def make_dirs(directory):
-    """Make dir path if it does not exist
-    
-    Args
-    ----
-        path (str): path to create
-    """
-    Path(directory).mkdir(parents=True, exist_ok=True)
-
-
-def gen_save_path(args, config):
-    """Generate save path
-
-    Args
-    ----
-        args (argsparse): cmd line args
-        config (easydict): config read from file
-
-    Returns
-    -------
-        path (str)
-    """
-
-    PATH = join(args.root, "{}".format(config.env))
-
-    if config.normalize_flag:
-        PATH = join(PATH, "norm")
-    else:
-        PATH = join(PATH, "raw")
-
-    PATH = join(PATH, "seed_" + str(args.seed))
-    DT = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M") if args.exp_name is None else args.exp_name
-    PATH = join(PATH, DT)
-
-    print('#'*80)
-    print("Saving to: {}".format(PATH))
-    return PATH
-
+from utils.utils import without_keys, compress_pickle, decompress_pickle, make_dirs, gen_save_path
 
 def train(args, config, PATH):
     """train
