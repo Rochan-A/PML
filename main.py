@@ -6,14 +6,28 @@ from pprint import pprint
 import mbrl.env.cartpole_continuous as cartpole_env
 import mbrl.env.reward_fns as reward_fns
 import mbrl.env.termination_fns as termination_fns
-from tester import Tester
-from torch.utils.tensorboard import SummaryWriter
-from trainer import TRAINERS
-from utils import (Logger, compress_pickle, filter_keys, gen_save_path,
-                   load_config, set_seeds)
 
-from envs import (ContextEnv, DummyContextEnv, configure_reward_fn,
-                  configure_term_fn)
+from torch.utils.tensorboard import SummaryWriter
+
+from pets import PETSTrainer, PETSTester
+
+from utils import (
+    Logger,
+    compress_pickle,
+    filter_keys,
+    gen_save_path,
+    load_config,
+    set_seeds,
+)
+from envs import ContextEnv, DummyContextEnv, configure_reward_fn, configure_term_fn
+
+TRAINERS = {
+    "pets": PETSTrainer,
+}
+
+TESTER = {
+    "pets": PETSTester,
+}
 
 
 def train(args: argparse.Namespace, config: dict, PATH: str) -> dict:
@@ -52,7 +66,7 @@ def train(args: argparse.Namespace, config: dict, PATH: str) -> dict:
     writer = SummaryWriter(log_dir=PATH, flush_secs=10)
 
     print("> Initializing Trainer...")
-    algo = TRAINERS[args.trainer](
+    algo = TRAINERS[args.method](
         dummy_env=dummy_env,
         env_fam=env_fam,
         reward_fn=reward_fn,
@@ -100,18 +114,20 @@ def test(args: argparse.Namespace, config: dict, model=None) -> None:
         reward_fn = configure_reward_fn(config)
 
     print("> Initializing Tester...")
-    tester = Tester(
+    tester = TESTER[args.method](
         dummy_env=dummy_env,
-        config=config,
+        env_fam=env_fam,
         reward_fn=reward_fn,
         term_fn=term_fn,
-        model=model,
-        args=args,
+        config=config,
+        rng=rng,
         save_path=PATH,
+        load_path=args.load,
+        model=model,
     )
 
     print("> Running Tester...")
-    data = tester.run(env_fam, num_trials=config.get("num_test_trials", 10))
+    data = tester.run(num_trials=config.get("num_test_trials", 10))
 
     print("> Saving tester data...")
     compress_pickle(join(PATH, "test_data.pkl"), data)
@@ -125,7 +141,10 @@ if __name__ == "__main__":
         "-c", "--config", required=True, help="path to config config file"
     )
     parser.add_argument(
-        "-t", "--trainer", required=True, help="Trainer to use. See trainer.py", choices=[key for key in TRAINERS.keys()]
+        "-m",
+        "--method",
+        required=True,
+        help="Method to use.",
     )
     parser.add_argument(
         "-s",
