@@ -20,7 +20,7 @@ from gym.envs.registration import register
 logger = logging.getLogger(__name__)
 
 
-class CartPoleEnv_template(gym.Env):
+class CartPoleEnv(gym.Env):
     """
     Description:
         A pole is attached by an un-actuated joint to a cart, which moves along

@@ -20,7 +20,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-class CartPoleSwingUpEnv_template(gym.Env):
+class CartPoleSwingUpEnv(gym.Env):
     metadata = {
         'render.modes': ['human', 'rgb_array'],
         'video.frames_per_second': 100

@@ -1,169 +1,169 @@
-import yaml, math
-from easydict import EasyDict
-from os.path import join
-import numpy as np
 import argparse
+import sys
+from os.path import join
 from pprint import pprint
-
-import bz2
-import pickle
-import _pickle as cPickle
-
-import torch
-
-from tensorboardX import SummaryWriter
 
 import mbrl.env.cartpole_continuous as cartpole_env
 import mbrl.env.reward_fns as reward_fns
 import mbrl.env.termination_fns as termination_fns
+from tester import Tester
+from torch.utils.tensorboard import SummaryWriter
+from trainer import TRAINERS
+from utils import (Logger, compress_pickle, filter_keys, gen_save_path,
+                   load_config, set_seeds)
 
-from trainers import Trainer, Tester
-from envs import ContexualEnv, DummyContextualEnv, configure_reward_fn, configure_term_fn
-from utils.utils import without_keys, compress_pickle, decompress_pickle, make_dirs, gen_save_path
+from envs import (ContextEnv, DummyContextEnv, configure_reward_fn,
+                  configure_term_fn)
 
-def train(args, config, PATH):
-    """train
 
-    Args
-    ----
-        args (argparse): cmd line args
-        config (easydict): config read from file
+def train(args: argparse.Namespace, config: dict, PATH: str) -> dict:
+    """Train model
+
+    Args:
+        args (argparse.Namespace): cmd line args
+        config (dict): config read from file
         PATH (str): save path
+
+    Returns:
+        dict: data with keys: train_losses, val_scores, rewards, model, all_contexts
     """
+    rng = set_seeds(args.seed)
 
-    rng = np.random.default_rng(args.seed)
-
-    if args.mdp:
+    if args.dry_run:
         # For testing implementation
-        import gym
-        env = cartpole_env.CartPoleEnv()
-        env.seed(args.seed)
-        env_fam = DummyContextualEnv(env, rng)
+        dummy_env = cartpole_env.CartPoleEnv()
+        dummy_env.seed(args.seed)
+        env_fam = DummyContextEnv(env=dummy_env, rng=rng)
 
         # This functions allows the model to evaluate the true rewards given
-        # an observation 
+        # an observation
         reward_fn = reward_fns.cartpole
         # This function allows the model to know if an observation should make
         # the episode end
         term_fn = termination_fns.cartpole
     else:
         # Contextual env
-        env_fam = ContexualEnv(config, rng)
-        env, _ = env_fam.reset()
+        env_fam = ContextEnv(config=config, rng=rng, seed=args.seed)
+        dummy_env, _ = env_fam.reset()
 
         term_fn = configure_term_fn(config)
         reward_fn = configure_reward_fn(config)
 
-    writer = SummaryWriter(PATH)
+    writer = SummaryWriter(log_dir=PATH, flush_secs=10)
 
-    trainer_cfg = {
-        'env': env,
-        'env_fam': env_fam,
-        'config': config,
-        'reward_fn': reward_fn,
-        'term_fn': term_fn,
-        'args': args,
-        'writer': writer,
-        'no_test_flag': args.no_test_flag,
-        'rng': rng,
-        'save_path': PATH
-    }
-    print('Trainer_cfg')
-    pprint(trainer_cfg)
+    print("> Initializing Trainer...")
+    algo = TRAINERS[args.trainer](
+        dummy_env=dummy_env,
+        env_fam=env_fam,
+        reward_fn=reward_fn,
+        term_fn=term_fn,
+        config=config,
+        rng=rng,
+        save_path=PATH,
+    )
 
-    # Initialize Trainer
-    algo = Trainer(**trainer_cfg)
-    data = algo.run(env_fam, env, PATH)
+    print("> Running Trainer...")
+    data = algo.run(writer=writer)
 
-    compress_pickle(join(PATH, 'train_data.pkl'), without_keys(data, 'model'))
+    print("> Saving trainer data...")
+    # Remove model from data and save
+    compress_pickle(join(PATH, "train_data.pkl"), filter_keys(data, "model"))
 
     return data
 
 
-def test(args, config, model=None):
-    """test
+def test(args: argparse.Namespace, config: dict, model=None) -> None:
+    """Test model
 
     Args
     ----
-        args (argparse): cmd line args
-        config (easydict): config read from file
+        args (argparse.Namespace): cmd line args
+        config (dict): config read from file
+        model (nn.Module): model to test. If None, load from save_path.
     """
+    rng = set_seeds(args.seed)
 
-    rng = np.random.default_rng(args.seed)
+    if args.dry_run:
+        # For testing implementation
+        dummy_env = cartpole_env.CartPoleEnv()
+        dummy_env.seed(args.seed)
+        env_fam = DummyContextEnv(env=dummy_env, rng=rng)
 
-    if args.mdp:
-        import gym
-        env = cartpole_env.CartPoleEnv()
-        env.seed(args.seed)
-        env_fam = DummyContextualEnv(env)
-
-        # This functions allows the model to evaluate the true rewards given
-        # an observation 
         reward_fn = reward_fns.cartpole
-        # This function allows the model to know if an observation should make
-        # the episode end
         term_fn = termination_fns.cartpole
     else:
         # Contextual env
-        env_fam = ContexualEnv(config, rng)
-        env, _ = env_fam.reset()
+        env_fam = ContextEnv(config=config, rng=rng, seed=args.seed)
+        dummy_env, _ = env_fam.reset()
 
         term_fn = configure_term_fn(config)
         reward_fn = configure_reward_fn(config)
 
-    tester_cfg = {
-        'env': env,
-        'config': config,
-        'reward_fn': reward_fn,
-        'term_fn': term_fn,
-        'model': model,
-        'args': args
-    }
-    print('tester_cfg')
-    pprint(tester_cfg)
+    print("> Initializing Tester...")
+    tester = Tester(
+        dummy_env=dummy_env,
+        config=config,
+        reward_fn=reward_fn,
+        term_fn=term_fn,
+        model=model,
+        args=args,
+        save_path=PATH,
+    )
 
-    tester = Tester(**tester_cfg)
-    data = tester.run(env_fam, env, 1, PATH)
+    print("> Running Tester...")
+    data = tester.run(env_fam, num_trials=config.get("num_test_trials", 10))
 
-    compress_pickle(join(PATH, 'test_data.pkl'), data)
+    print("> Saving tester data...")
+    compress_pickle(join(PATH, "test_data.pkl"), data)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Code to test Generalization in Contextual MDPs for MBRL")
-    parser.add_argument("--config", help="config file")
-    parser.add_argument("--root", default="./saves/", help="root folder to save experiments")
-    parser.add_argument("--exp-name", default=None, help="experiment name")
-    parser.add_argument("--load", help="path to load models from")
-    parser.add_argument("--logger", action="store_true", help="Print training log")
+    parser = argparse.ArgumentParser(
+        description="Code to test Generalization of Model-Based RL in Contextual MDPs."
+    )
+    parser.add_argument(
+        "-c", "--config", required=True, help="path to config config file"
+    )
+    parser.add_argument(
+        "-t", "--trainer", required=True, help="Trainer to use. See trainer.py", choices=[key for key in TRAINERS.keys()]
+    )
+    parser.add_argument(
+        "-s",
+        "--save-path",
+        default="./saves/",
+        help="Path to save models and results. Default: ./saves/",
+    )
+    parser.add_argument("-e", "--exp-name", default=None, help="Experiment name")
+    parser.add_argument("-l", "--load", help="Path to load models from.")
     parser.add_argument("--seed", type=int, default=0, help="random_seed")
     parser.add_argument("--cuda", type=int, default=0, help="CUDA device idx")
     parser.add_argument(
-        "--mdp", action="store_true", help="flag to enable only MDP training"
+        "--dry-run",
+        action="store_true",
+        help="Flag to enable training for a single context. For testing implementation.",
     )
     parser.add_argument(
-        "--no_test_flag", action="store_true", help="flag to disable test"
+        "--no_test_flag", action="store_true", help="Flag to disable test"
     )
     parser.add_argument(
-        "--only_test_flag", action="store_true", help="flag to enable only test"
+        "--only_test_flag", action="store_true", help="Flag to enable only test"
     )
     args = parser.parse_args()
 
-    if args.config is not None:
-        with open(args.config) as f:
-            config = yaml.safe_load(f)
-        config['device'] = torch.device('cuda:{}'.format(args.cuda)) if torch.cuda.is_available() else torch.device('cpu')
-        config = EasyDict(config)
-    else:
-        raise ValueError(str(args.config))
-
+    config = load_config(args)
     PATH = gen_save_path(args, config)
+    sys.stdout = Logger(join(PATH, "log.txt"))
+
+    pprint(args)
+    pprint(config)
 
     if args.no_test_flag:
-        make_dirs(PATH)
+        print("> Running only train loop...")
         _ = train(args, config, PATH)
     elif args.only_test_flag:
+        print("> Running only test loop...")
         test(args, config)
     else:
-        make_dirs(PATH)
+        print("> Running train & test loop...")
         data = train(args, config, PATH)
-        test(args, config, data['model'])
+        test(args, config, data["model"])
